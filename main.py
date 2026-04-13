@@ -44,7 +44,8 @@ MOBZ: MobzClient
 
 
 def is_admin(user_id: int | None) -> bool:
-    return bool(user_id and user_id in CONFIG.admin_ids)
+    # Bot is open for all users.
+    return True
 
 
 async def deny_access(target: Message | CallbackQuery) -> None:

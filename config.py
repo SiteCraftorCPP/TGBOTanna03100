@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
-
-from admins_extra import load_extra_admin_ids
 
 
 @dataclass(slots=True)
@@ -50,7 +47,6 @@ class MobzApiSettings:
 class AppConfig:
     project_dir: Path
     token: str
-    admin_ids: set[int]
     proxy_url: str | None
     mobz_provider: str
     formats: list[FormatOption]
@@ -75,19 +71,6 @@ def _normalize_proxy(raw_proxy: str | None) -> str | None:
         return f"socks5://{host}:{port}"
 
     raise ValueError("TELEGRAM_PROXY должен быть socks5 URL или host:port[:user:pass].")
-
-
-def _parse_admin_ids(raw_value: str) -> set[int]:
-    chunks = [item.strip() for item in re.split(r"[,\s;]+", raw_value.strip()) if item.strip()]
-    admin_ids: set[int] = set()
-    for item in chunks:
-        try:
-            admin_ids.add(int(item))
-        except ValueError as exc:
-            raise RuntimeError(
-                f"Некорректный TELEGRAM_ADMIN_IDS: {item!r}. Используйте только числовые Telegram ID."
-            ) from exc
-    return admin_ids
 
 
 def _default_mobz_api() -> MobzApiSettings:
@@ -212,22 +195,12 @@ def load_config() -> AppConfig:
     if not token:
         raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN в .env")
 
-    raw_admin_ids = os.getenv("TELEGRAM_ADMIN_IDS", "")
-    admin_ids = _parse_admin_ids(raw_admin_ids)
-    extra_admin_ids = load_extra_admin_ids(project_dir)
-    if not admin_ids and not extra_admin_ids:
-        raise RuntimeError(
-            "Нужен хотя бы один администратор: укажите TELEGRAM_ADMIN_IDS в .env "
-            "(можно несколько id через запятую) и/или добавьте id в data/extra_admins.json."
-        )
-
     formats, deeplinks, mobz_api = _load_settings(project_dir)
     proxy_url = _normalize_proxy(os.getenv("TELEGRAM_PROXY"))
 
     return AppConfig(
         project_dir=project_dir,
         token=token,
-        admin_ids=admin_ids,
         proxy_url=proxy_url,
         mobz_provider=os.getenv("MOBZ_PROVIDER", "mock").strip().lower() or "mock",
         formats=formats,

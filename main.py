@@ -10,7 +10,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandStart, or_f
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -18,16 +18,10 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, Message, ReplyKey
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from config import AppConfig, DeeplinkConfig, FormatOption, MarketplaceConfig, load_config
-from deeplinks_extra import add_extra_deeplink, load_extra_deeplinks, remove_extra_deeplink
-from formats_extra import (
-    add_extra_format,
-    load_extra_format_rows,
-    parse_format_line,
-    remove_extra_format,
-)
+from deeplinks_extra import load_extra_deeplinks
+from formats_extra import load_extra_format_rows
 from mobz_client import CreateLinkRequest, MockMobzClient, MobzClient
 from mobz_http import HttpMobzClient
-from admins_extra import add_extra_admin, load_extra_admin_ids, remove_extra_admin
 from storage import JsonStorage
 
 
@@ -45,35 +39,10 @@ class StatsStates(StatesGroup):
     entering_period = State()
 
 
-class FormatManageStates(StatesGroup):
-    entering_line = State()
-
-
-class AdminAddAdminStates(StatesGroup):
-    waiting_telegram_id = State()
-
-
-class DeeplinkWizardStates(StatesGroup):
-    waiting_id = State()
-    waiting_label = State()
-    waiting_api_key_env = State()
-    waiting_domain = State()
-    waiting_folders = State()
-
-
 router = Router()
 CONFIG: AppConfig
 STORE: JsonStorage
 MOBZ: MobzClient
-
-
-def is_admin(user_id: int | None) -> bool:
-    """Администратор: TELEGRAM_ADMIN_IDS в .env и/или data/extra_admins.json (равные права)."""
-    if user_id is None:
-        return False
-    if user_id in CONFIG.admin_ids:
-        return True
-    return user_id in load_extra_admin_ids(CONFIG.project_dir)
 
 
 def can_use_bot(user_id: int | None) -> bool:
@@ -89,23 +58,12 @@ async def deny_access(target: Message | CallbackQuery) -> None:
         await target.answer(text, show_alert=True)
 
 
-async def deny_admin_only(target: Message | CallbackQuery) -> None:
-    text = "Только для админов (кнопка «Админ»)."
-    uid = target.from_user.id if target.from_user else None
-    if isinstance(target, Message):
-        await target.answer(text, reply_markup=main_menu(uid))
-    else:
-        await target.answer(text, show_alert=True)
-
-
-def main_menu(for_user_id: int | None = None) -> Any:
+def main_menu() -> Any:
     builder = ReplyKeyboardBuilder()
     builder.button(text="Создать ссылку")
     builder.button(text="Мои ссылки")
     builder.button(text="Статистика")
     builder.button(text="Справка")
-    if for_user_id is not None and is_admin(for_user_id):
-        builder.button(text="Админ")
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
@@ -243,38 +201,6 @@ def parse_period(value: str) -> tuple[date, date] | None:
     return start_date, end_date
 
 
-_DL_WIZ_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$", re.IGNORECASE)
-_API_KEY_ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
-
-
-def _deeplink_wizard_parse_id(value: str) -> str | None:
-    s = value.strip().lower()
-    if not _DL_WIZ_ID_RE.match(s):
-        return None
-    return s
-
-
-def _deeplink_wizard_parse_api_env(value: str) -> str | None:
-    s = value.strip().upper()
-    if not _API_KEY_ENV_RE.match(s):
-        return None
-    return s
-
-
-def _deeplink_wizard_parse_domain(value: str) -> str | None:
-    s = value.strip().lower().replace("https://", "").replace("http://", "").rstrip("/")
-    if not s or " " in s or "/" in s or "." not in s:
-        return None
-    return s
-
-
-def _deeplink_wizard_parse_folders(value: str) -> list[str]:
-    s = value.strip()
-    if not s or s in {"-", "0", "нет", "no"}:
-        return []
-    return [p.strip() for p in re.split(r"[\n,;]+", s) if p.strip()]
-
-
 def build_short_code(blogger_slug: str, date_value: str, format_slug: str, marketplace_suffix: str) -> str:
     date_slug = date_value.replace(".", "")
     return f"{blogger_slug}{date_slug}{format_slug}{marketplace_suffix}"
@@ -330,46 +256,6 @@ def deeplink_keyboard():
     return builder.as_markup()
 
 
-def admin_panel_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="Форматы", callback_data="admin:formats"))
-    builder.row(InlineKeyboardButton(text="Администраторы", callback_data="admin:admins"))
-    builder.row(InlineKeyboardButton(text="Диплинки (доп.)", callback_data="admin:deeplinks"))
-    return builder.as_markup()
-
-
-def admins_manage_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="➕ Добавить администратора", callback_data="admins:add"))
-    for uid in sorted(load_extra_admin_ids(CONFIG.project_dir)):
-        builder.row(
-            InlineKeyboardButton(
-                text=f"🗑 {uid}",
-                callback_data=f"admins:del:{uid}",
-            )
-        )
-    return builder.as_markup()
-
-
-def deeplinks_manage_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(
-            text="➕ Добавить диплинк",
-            callback_data="deeplinks:add",
-        )
-    )
-    for dl in load_extra_deeplinks(CONFIG.project_dir):
-        label = (dl.label or dl.id)[:48]
-        builder.row(
-            InlineKeyboardButton(
-                text=f"🗑 {label}",
-                callback_data=f"deeplinks:del:{dl.id}",
-            )
-        )
-    return builder.as_markup()
-
-
 def marketplace_keyboard(deeplink: DeeplinkConfig):
     builder = InlineKeyboardBuilder()
     for item in deeplink.marketplaces:
@@ -401,20 +287,6 @@ def format_keyboard():
             InlineKeyboardButton(
                 text=item.label,
                 callback_data=f"format:{item.id}",
-            )
-        )
-    return builder.as_markup()
-
-
-def formats_manage_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="➕ Добавить формат", callback_data="formats:add"))
-    for row in load_extra_format_rows(CONFIG.project_dir):
-        label = row["label"][:52]
-        builder.row(
-            InlineKeyboardButton(
-                text=f"🗑 {label}",
-                callback_data=f"formats:del:{row['id']}",
             )
         )
     return builder.as_markup()
@@ -480,8 +352,7 @@ async def start_handler(message: Message, state: FSMContext) -> None:
         return
 
     await state.clear()
-    uid = message.from_user.id if message.from_user else None
-    await message.answer("Готово. Меню ниже.", reply_markup=main_menu(uid))
+    await message.answer("Готово. Меню ниже.", reply_markup=main_menu())
 
 
 @router.message(Command("cancel"))
@@ -491,8 +362,7 @@ async def cancel_handler(message: Message, state: FSMContext) -> None:
         return
 
     await state.clear()
-    uid = message.from_user.id if message.from_user else None
-    await message.answer("Сброс.", reply_markup=main_menu(uid))
+    await message.answer("Сброс.", reply_markup=main_menu())
 
 
 @router.message(F.text == "Справка")
@@ -529,437 +399,6 @@ async def stats_handler(message: Message) -> None:
         return
 
     await message.answer("Статистика:", reply_markup=stats_keyboard())
-
-
-def _formats_manage_text() -> str:
-    base = ", ".join(f.id for f in CONFIG.formats)
-    return f"Форматы. База: {base}. Свои: код|подпись|суффикс. Удалить — 🗑."
-
-
-def _admins_manage_text() -> str:
-    env_admins = ", ".join(str(i) for i in sorted(CONFIG.admin_ids)) or "—"
-    extra = sorted(load_extra_admin_ids(CONFIG.project_dir))
-    extra_txt = ", ".join(str(i) for i in extra) if extra else "—"
-    return f"Админы. .env: {env_admins}. Бот: {extra_txt}. + добавить, 🗑 снять (только из бота)."
-
-
-def _deeplinks_manage_text() -> str:
-    base = ", ".join(d.id for d in CONFIG.deeplinks)
-    extra = ", ".join(d.id for d in load_extra_deeplinks(CONFIG.project_dir)) or "—"
-    return f"Диплинки. settings: {base}. доп.: {extra}. + мастер (WB). 🗑 только доп."
-
-
-@router.message(or_f(F.text == "Админ", Command("admin")))
-async def admin_panel_handler(message: Message) -> None:
-    uid = message.from_user.id if message.from_user else None
-    if not can_use_bot(uid):
-        await deny_access(message)
-        return
-    if not is_admin(uid):
-        await deny_admin_only(message)
-        return
-
-    await message.answer("Админка:", reply_markup=admin_panel_keyboard())
-
-
-@router.callback_query(F.data == "admin:formats")
-async def admin_formats_callback(callback: CallbackQuery) -> None:
-    if not can_use_bot(callback.from_user.id if callback.from_user else None):
-        await deny_access(callback)
-        return
-    if not is_admin(callback.from_user.id if callback.from_user else None):
-        await deny_admin_only(callback)
-        return
-
-    await callback.answer()
-    await callback.message.answer(
-        _formats_manage_text(),
-        reply_markup=formats_manage_keyboard(),
-    )
-
-
-@router.message(Command("formats"))
-async def formats_command_handler(message: Message) -> None:
-    uid = message.from_user.id if message.from_user else None
-    if not can_use_bot(uid):
-        await deny_access(message)
-        return
-    if not is_admin(uid):
-        await deny_admin_only(message)
-        return
-
-    await message.answer(
-        _formats_manage_text(),
-        reply_markup=formats_manage_keyboard(),
-    )
-
-
-@router.callback_query(F.data == "admin:admins")
-async def admin_admins_callback(callback: CallbackQuery) -> None:
-    if not can_use_bot(callback.from_user.id if callback.from_user else None):
-        await deny_access(callback)
-        return
-    if not is_admin(callback.from_user.id if callback.from_user else None):
-        await deny_admin_only(callback)
-        return
-
-    await callback.answer()
-    await callback.message.answer(
-        _admins_manage_text(),
-        reply_markup=admins_manage_keyboard(),
-    )
-
-
-@router.callback_query(F.data == "admin:deeplinks")
-async def admin_deeplinks_callback(callback: CallbackQuery) -> None:
-    if not can_use_bot(callback.from_user.id if callback.from_user else None):
-        await deny_access(callback)
-        return
-    if not is_admin(callback.from_user.id if callback.from_user else None):
-        await deny_admin_only(callback)
-        return
-
-    await callback.answer()
-    await callback.message.answer(
-        _deeplinks_manage_text(),
-        reply_markup=deeplinks_manage_keyboard(),
-    )
-
-
-@router.callback_query(F.data == "admins:add")
-async def admins_add_start(callback: CallbackQuery, state: FSMContext) -> None:
-    if not can_use_bot(callback.from_user.id if callback.from_user else None):
-        await deny_access(callback)
-        return
-    if not is_admin(callback.from_user.id if callback.from_user else None):
-        await deny_admin_only(callback)
-        return
-
-    await callback.answer()
-    await state.set_state(AdminAddAdminStates.waiting_telegram_id)
-    await callback.message.answer(
-        "ID нового админа (цифры). /cancel"
-    )
-
-
-@router.callback_query(F.data.startswith("admins:del:"))
-async def admins_delete_callback(callback: CallbackQuery) -> None:
-    if not can_use_bot(callback.from_user.id if callback.from_user else None):
-        await deny_access(callback)
-        return
-    if not is_admin(callback.from_user.id if callback.from_user else None):
-        await deny_admin_only(callback)
-        return
-
-    raw_id = callback.data.split(":", maxsplit=2)[2]
-    await callback.answer()
-    try:
-        uid_del = int(raw_id)
-    except ValueError:
-        await callback.message.answer("Некорректный ID.")
-        return
-
-    err = remove_extra_admin(
-        CONFIG.project_dir,
-        uid_del,
-        env_admin_ids=CONFIG.admin_ids,
-    )
-    if err:
-        await callback.message.answer(err)
-    else:
-        await callback.message.answer(f"Администратор <code>{uid_del}</code> удалён из списка бота.")
-
-    await callback.message.answer(
-        _admins_manage_text(),
-        reply_markup=admins_manage_keyboard(),
-    )
-
-
-@router.message(AdminAddAdminStates.waiting_telegram_id)
-async def admins_add_id_received(message: Message, state: FSMContext) -> None:
-    uid = message.from_user.id if message.from_user else None
-    if not can_use_bot(uid):
-        await deny_access(message)
-        return
-    if not is_admin(uid):
-        await deny_admin_only(message)
-        return
-
-    text = (message.text or "").strip()
-    if not re.fullmatch(r"\d{5,15}", text):
-        await message.answer("Нужен только числовой ID (5–15 цифр). Повторите или /cancel.")
-        return
-
-    new_id = int(text)
-    err = add_extra_admin(
-        CONFIG.project_dir,
-        new_id,
-        env_admin_ids=CONFIG.admin_ids,
-    )
-    if err:
-        await message.answer(f"{err}\nПовторите или /cancel.")
-        return
-
-    await state.clear()
-    await message.answer(
-        f"Администратор <code>{new_id}</code> добавлен.",
-        reply_markup=main_menu(uid),
-    )
-    await message.answer(
-        _admins_manage_text(),
-        reply_markup=admins_manage_keyboard(),
-    )
-
-
-@router.callback_query(F.data == "deeplinks:add")
-async def deeplinks_add_start(callback: CallbackQuery, state: FSMContext) -> None:
-    if not can_use_bot(callback.from_user.id if callback.from_user else None):
-        await deny_access(callback)
-        return
-    if not is_admin(callback.from_user.id if callback.from_user else None):
-        await deny_admin_only(callback)
-        return
-
-    await callback.answer()
-    await state.set_state(DeeplinkWizardStates.waiting_id)
-    await callback.message.answer(
-        "1/5 Код диплинка (латиница, _), напр. second. /cancel"
-    )
-
-
-@router.callback_query(F.data.startswith("deeplinks:del:"))
-async def deeplinks_delete_callback(callback: CallbackQuery) -> None:
-    if not can_use_bot(callback.from_user.id if callback.from_user else None):
-        await deny_access(callback)
-        return
-    if not is_admin(callback.from_user.id if callback.from_user else None):
-        await deny_admin_only(callback)
-        return
-
-    dl_id = callback.data.split(":", maxsplit=2)[2]
-    await callback.answer()
-    if remove_extra_deeplink(CONFIG.project_dir, dl_id):
-        refresh_mobz_client()
-        await callback.message.answer(f"Диплинк <code>{dl_id}</code> удалён из дополнительных.")
-    else:
-        await callback.message.answer(
-            "Не удалось удалить: такого id нет в дополнительных или это диплинк из settings.json."
-        )
-
-    await callback.message.answer(
-        _deeplinks_manage_text(),
-        reply_markup=deeplinks_manage_keyboard(),
-    )
-
-
-@router.message(DeeplinkWizardStates.waiting_id)
-async def deeplink_wiz_id(message: Message, state: FSMContext) -> None:
-    uid = message.from_user.id if message.from_user else None
-    if not can_use_bot(uid):
-        await deny_access(message)
-        return
-    if not is_admin(uid):
-        await deny_admin_only(message)
-        return
-
-    parsed = _deeplink_wizard_parse_id(message.text or "")
-    if not parsed:
-        await message.answer("Неверный код. /cancel")
-        return
-
-    taken = {d.id for d in CONFIG.deeplinks} | {d.id for d in load_extra_deeplinks(CONFIG.project_dir)}
-    if parsed in taken:
-        await message.answer("Такой код уже занят. Введите другой.")
-        return
-
-    await state.update_data(wiz_id=parsed)
-    await state.set_state(DeeplinkWizardStates.waiting_label)
-    await message.answer("2/5 Подпись кнопки (до 80 симв.)")
-
-
-@router.message(DeeplinkWizardStates.waiting_label)
-async def deeplink_wiz_label(message: Message, state: FSMContext) -> None:
-    uid = message.from_user.id if message.from_user else None
-    if not can_use_bot(uid):
-        await deny_access(message)
-        return
-    if not is_admin(uid):
-        await deny_admin_only(message)
-        return
-
-    label = (message.text or "").strip()
-    if not label or len(label) > 80:
-        await message.answer("1–80 символов.")
-        return
-
-    await state.update_data(wiz_label=label)
-    await state.set_state(DeeplinkWizardStates.waiting_api_key_env)
-    await message.answer("3/5 Переменная в .env для ключа, напр. MOBZ_API_KEY_SECOND")
-
-
-@router.message(DeeplinkWizardStates.waiting_api_key_env)
-async def deeplink_wiz_api_env(message: Message, state: FSMContext) -> None:
-    uid = message.from_user.id if message.from_user else None
-    if not can_use_bot(uid):
-        await deny_access(message)
-        return
-    if not is_admin(uid):
-        await deny_admin_only(message)
-        return
-
-    envv = _deeplink_wizard_parse_api_env(message.text or "")
-    if not envv:
-        await message.answer("Неверно. Пример: MOBZ_API_KEY_SECOND")
-        return
-
-    await state.update_data(wiz_api_env=envv)
-    await state.set_state(DeeplinkWizardStates.waiting_domain)
-    await message.answer("4/5 Домен без https, напр. shop.mobz.link")
-
-
-@router.message(DeeplinkWizardStates.waiting_domain)
-async def deeplink_wiz_domain(message: Message, state: FSMContext) -> None:
-    uid = message.from_user.id if message.from_user else None
-    if not can_use_bot(uid):
-        await deny_access(message)
-        return
-    if not is_admin(uid):
-        await deny_admin_only(message)
-        return
-
-    dom = _deeplink_wizard_parse_domain(message.text or "")
-    if not dom:
-        await message.answer("Неверный домен.")
-        return
-
-    await state.update_data(wiz_domain=dom)
-    await state.set_state(DeeplinkWizardStates.waiting_folders)
-    await message.answer("5/5 Папки WB через запятую (как в Mobz) или 0")
-
-
-@router.message(DeeplinkWizardStates.waiting_folders)
-async def deeplink_wiz_folders(message: Message, state: FSMContext) -> None:
-    uid = message.from_user.id if message.from_user else None
-    if not can_use_bot(uid):
-        await deny_access(message)
-        return
-    if not is_admin(uid):
-        await deny_admin_only(message)
-        return
-
-    data = await state.get_data()
-    folders = _deeplink_wizard_parse_folders(message.text or "")
-    raw: dict[str, Any] = {
-        "id": data["wiz_id"],
-        "label": data["wiz_label"],
-        "api_key_env": data["wiz_api_env"],
-        "default_domain": data["wiz_domain"],
-        "marketplaces": [
-            {
-                "id": "wb",
-                "label": "Wildberries",
-                "suffix": "wb",
-                "notification_label": "WB",
-                "folders": folders,
-            }
-        ],
-    }
-    base_ids = {d.id for d in CONFIG.deeplinks}
-    err = add_extra_deeplink(CONFIG.project_dir, raw, base_ids)
-    if err:
-        await message.answer(f"{err}\nПопробуйте снова с шага 1 или /cancel.")
-        return
-
-    await state.clear()
-    refresh_mobz_client()
-    await message.answer(
-        f"Диплинк {raw['id']} готов. В .env: {raw['api_key_env']}=ключ. Перезапуск сервиса.",
-        reply_markup=main_menu(uid),
-    )
-    await message.answer(
-        _deeplinks_manage_text(),
-        reply_markup=deeplinks_manage_keyboard(),
-    )
-
-
-@router.callback_query(F.data == "formats:add")
-async def formats_add_start(callback: CallbackQuery, state: FSMContext) -> None:
-    if not can_use_bot(callback.from_user.id if callback.from_user else None):
-        await deny_access(callback)
-        return
-    if not is_admin(callback.from_user.id if callback.from_user else None):
-        await deny_admin_only(callback)
-        return
-
-    await callback.answer()
-    await state.set_state(FormatManageStates.entering_line)
-    await callback.message.answer("Строка: код|подпись|суффикс  /cancel")
-
-
-@router.callback_query(F.data.startswith("formats:del:"))
-async def formats_delete(callback: CallbackQuery) -> None:
-    if not can_use_bot(callback.from_user.id if callback.from_user else None):
-        await deny_access(callback)
-        return
-    if not is_admin(callback.from_user.id if callback.from_user else None):
-        await deny_admin_only(callback)
-        return
-
-    format_id = callback.data.split(":", maxsplit=2)[2]
-    await callback.answer()
-    if remove_extra_format(CONFIG.project_dir, format_id):
-        await callback.message.answer(f"Формат «{format_id}» удалён из дополнительных.")
-    else:
-        await callback.message.answer("Такого дополнительного формата нет (базовые из settings.json здесь не удаляются).")
-
-    await callback.message.answer(
-        _formats_manage_text(),
-        reply_markup=formats_manage_keyboard(),
-    )
-
-
-@router.message(FormatManageStates.entering_line)
-async def formats_add_line(message: Message, state: FSMContext) -> None:
-    uid = message.from_user.id if message.from_user else None
-    if not can_use_bot(uid):
-        await deny_access(message)
-        return
-    if not is_admin(uid):
-        await deny_admin_only(message)
-        return
-
-    line = (message.text or "").strip()
-    parsed = parse_format_line(line)
-    if not parsed:
-        await message.answer(
-            "Нужны три части через | : <code>код|подпись|суффикс</code>\n"
-            "Повторите ввод или /cancel."
-        )
-        return
-
-    format_id, label, slug = parsed
-    reserved = {f.id for f in CONFIG.formats}
-    err = add_extra_format(
-        CONFIG.project_dir,
-        format_id,
-        label,
-        slug,
-        reserved_ids=reserved,
-    )
-    if err:
-        await message.answer(f"{err}\nПовторите ввод или /cancel.")
-        return
-
-    await state.clear()
-    await message.answer(
-        f"Формат «{label}» (<code>{format_id}</code>) добавлен.\n"
-        "Он уже доступен при выборе формата при создании ссылки.",
-        reply_markup=main_menu(uid),
-    )
-    await message.answer(
-        _formats_manage_text(),
-        reply_markup=formats_manage_keyboard(),
-    )
 
 
 @router.callback_query(F.data.startswith("deeplink:"))
@@ -1347,7 +786,7 @@ async def fallback_handler(message: Message) -> None:
         await _answer_stats_period(message, start_date, end_date)
         return
 
-    await message.answer("Меню или /start.", reply_markup=main_menu(uid))
+    await message.answer("Меню или /start.", reply_markup=main_menu())
 
 
 async def build_bot() -> Bot:

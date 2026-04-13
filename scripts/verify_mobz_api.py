@@ -23,11 +23,11 @@ from mobz_http import HttpMobzClient
 
 
 def ok(name: str, detail: str = "") -> None:
-    print(f"[OK] {name}" + (f" — {detail}" if detail else ""))
+    print(f"[OK] {name}" + (f" — {detail}" if detail else ""), flush=True)
 
 
 def fail(name: str, exc: BaseException) -> None:
-    print(f"[FAIL] {name}: {exc}")
+    print(f"[FAIL] {name}: {exc}", flush=True)
 
 
 def _first_link_id_from_mylinks(payload: dict) -> tuple[str, str] | None:
@@ -54,6 +54,7 @@ def _first_link_id_from_mylinks(payload: dict) -> tuple[str, str] | None:
 
 
 async def main() -> int:
+    print("verify_mobz_api: старт проверки Mobz Public API…", flush=True)
     config = load_config()
     if config.mobz_provider != "http":
         print("В .env задайте MOBZ_PROVIDER=http для проверки реального API.")
@@ -231,11 +232,27 @@ async def main() -> int:
         fail("stats период (выборка)", e)
         errors += 1
 
-    print("---")
+    # 7) stats_for_period — тот же вызов, что в боте (main._answer_stats_period)
+    try:
+        d0 = date.today() - timedelta(days=7)
+        d1 = date.today()
+        t0 = time.perf_counter()
+        rows = await client.stats_for_period(d0, d1)
+        dt = time.perf_counter() - t0
+        total_clicks = sum(int(r.get("clicks", 0) or 0) for r in rows)
+        ok(
+            "HttpMobzClient.stats_for_period (бот: статистика за период)",
+            f"ссылок={len(rows)}, сумма кликов={total_clicks}, {dt:.1f}s",
+        )
+    except Exception as e:
+        fail("HttpMobzClient.stats_for_period", e)
+        errors += 1
+
+    print("---", flush=True)
     if errors:
-        print(f"Итого: {errors} ошибок")
+        print(f"Итого: {errors} ошибок", flush=True)
         return 1
-    print("Итого: все проверки прошли")
+    print("Итого: все проверки прошли", flush=True)
     return 0
 
 

@@ -50,7 +50,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-В `.env`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_IDS` (один или несколько id через запятую), при необходимости `TELEGRAM_PROXY`. Бот открыт для любого пользователя Telegram; админы из `.env` и из `data/extra_admins.json` (добавляются в боте) имеют раздел «Админ» и равные права.
+В `.env`: `TELEGRAM_BOT_TOKEN`, при необходимости `TELEGRAM_PROXY`. Бот доступен любому пользователю Telegram в личном чате. Дополнительные форматы и диплинки — правка `data/formats_extra.json` и `data/deeplinks_extra.json` на сервере (или базовые в `settings.json`).
 
 ## Деплой на VPS (systemd)
 

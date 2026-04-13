@@ -716,8 +716,7 @@ async def _answer_stats_period(message: Message, start_date: date, end_date: dat
     with_clicks = [item for item in rows if item.get("clicks", 0) > 0]
     if not with_clicks:
         await message.answer(
-            "За этот период по данным Mobz нет кликов ни по одной из ваших ссылок "
-            "(или все значения 0). Попробуйте другой диапазон дат."
+            "За этот период по данным Mobz нет кликов ни по одной из ваших ссылок"
         )
         return
 

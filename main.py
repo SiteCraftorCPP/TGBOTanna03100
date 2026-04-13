@@ -82,7 +82,7 @@ def can_use_bot(user_id: int | None) -> bool:
 
 
 async def deny_access(target: Message | CallbackQuery) -> None:
-    text = "Не удалось определить пользователя Telegram. Откройте бот из личного чата."
+    text = "Откройте бот из личного чата."
     if isinstance(target, Message):
         await target.answer(text, reply_markup=ReplyKeyboardRemove())
     else:
@@ -90,7 +90,7 @@ async def deny_access(target: Message | CallbackQuery) -> None:
 
 
 async def deny_admin_only(target: Message | CallbackQuery) -> None:
-    text = "Эта настройка доступна только администраторам (раздел «Админ»)."
+    text = "Только для админов (кнопка «Админ»)."
     uid = target.from_user.id if target.from_user else None
     if isinstance(target, Message):
         await target.answer(text, reply_markup=main_menu(uid))
@@ -207,20 +207,39 @@ def _parse_date_dmY(part: str) -> date | None:
 
 
 def parse_period(value: str) -> tuple[date, date] | None:
-    cleaned = value.strip().replace(" ", "")
-    cleaned = cleaned.replace("–", "-").replace("—", "-").replace("−", "-")
-    parts = cleaned.split("-")
-    if len(parts) != 2:
-        return None
+    """Две даты Д.М.ГГГГ; между ними — дефис, длинное тире, пробелы и т.п."""
+    cleaned = (value or "").strip().replace(" ", "")
+    m = re.search(
+        r"(\d{1,3}\.\d{1,2}\.\d{4})\s*[^\d.]+\s*(\d{1,3}\.\d{1,2}\.\d{4})",
+        cleaned,
+    )
+    if m:
+        a, b = m.group(1), m.group(2)
+    else:
+        for ch in (
+            "\u2010",
+            "\u2011",
+            "\u2012",
+            "\u2013",
+            "\u2014",
+            "\u2015",
+            "\u2212",
+            "\ufe58",
+            "\ufe63",
+            "\uff0d",
+        ):
+            cleaned = cleaned.replace(ch, "-")
+        parts = cleaned.split("-", maxsplit=1)
+        if len(parts) != 2:
+            return None
+        a, b = parts[0], parts[1]
 
-    start_date = _parse_date_dmY(parts[0])
-    end_date = _parse_date_dmY(parts[1])
+    start_date = _parse_date_dmY(a)
+    end_date = _parse_date_dmY(b)
     if start_date is None or end_date is None:
         return None
-
     if start_date > end_date:
         return None
-
     return start_date, end_date
 
 
@@ -313,7 +332,7 @@ def deeplink_keyboard():
 
 def admin_panel_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="Форматы публикаций", callback_data="admin:formats"))
+    builder.row(InlineKeyboardButton(text="Форматы", callback_data="admin:formats"))
     builder.row(InlineKeyboardButton(text="Администраторы", callback_data="admin:admins"))
     builder.row(InlineKeyboardButton(text="Диплинки (доп.)", callback_data="admin:deeplinks"))
     return builder.as_markup()
@@ -425,10 +444,7 @@ async def begin_create_flow(message: Message, state: FSMContext) -> None:
         await prompt_marketplaces(message, all_dl[0].id, state)
         return
 
-    await message.answer(
-        "Выберите, с каким диплинком работаем.",
-        reply_markup=deeplink_keyboard(),
-    )
+    await message.answer("Диплинк:", reply_markup=deeplink_keyboard())
 
 
 async def show_links(message: Message | CallbackQuery) -> None:
@@ -451,15 +467,9 @@ async def show_links(message: Message | CallbackQuery) -> None:
 
 async def show_help(message: Message) -> None:
     await message.answer(
-        "Сценарий работы:\n"
-        "1. Нажмите «Создать ссылку».\n"
-        "2. Выберите площадку и папку.\n"
-        "3. Отправьте ссылку на товар или бренд.\n"
-        "4. Отправьте ник блогера.\n"
-        "5. Укажите дату в формате ДД.ММ.\n"
-        "6. Выберите формат публикации из списка.\n"
-        "7. После создания откройте ссылку в разделе «Мои ссылки» и вшейте ЕРИД.\n\n"
-        "Команда /cancel сбрасывает текущий сценарий."
+        "Создать ссылку → площадка → папка (если есть) → URL → ник → дата ДД.ММ → формат.\n"
+        "Потом «Мои ссылки» → вшить ЕРИД.\n"
+        "/cancel — сброс."
     )
 
 
@@ -471,10 +481,7 @@ async def start_handler(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     uid = message.from_user.id if message.from_user else None
-    await message.answer(
-        "Бот готов к работе. Через меню можно создать короткую ссылку, вшить ЕРИД и открыть список ранее созданных ссылок.",
-        reply_markup=main_menu(uid),
-    )
+    await message.answer("Готово. Меню ниже.", reply_markup=main_menu(uid))
 
 
 @router.message(Command("cancel"))
@@ -485,7 +492,7 @@ async def cancel_handler(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     uid = message.from_user.id if message.from_user else None
-    await message.answer("Текущий сценарий сброшен.", reply_markup=main_menu(uid))
+    await message.answer("Сброс.", reply_markup=main_menu(uid))
 
 
 @router.message(F.text == "Справка")
@@ -521,41 +528,25 @@ async def stats_handler(message: Message) -> None:
         await deny_access(message)
         return
 
-    await message.answer("Выберите вариант выгрузки статистики.", reply_markup=stats_keyboard())
+    await message.answer("Статистика:", reply_markup=stats_keyboard())
 
 
 def _formats_manage_text() -> str:
     base = ", ".join(f.id for f in CONFIG.formats)
-    return (
-        "<b>Форматы</b>\n"
-        f"Базовые (в settings.json): {base}.\n"
-        "Свои — кнопка ниже, одна строка: <code>код|подпись|суффикс</code> "
-        "пример <code>reels|Reels|reels</code>. Удаление — 🗑 только у своих."
-    )
+    return f"Форматы. База: {base}. Свои: код|подпись|суффикс. Удалить — 🗑."
 
 
 def _admins_manage_text() -> str:
     env_admins = ", ".join(str(i) for i in sorted(CONFIG.admin_ids)) or "—"
     extra = sorted(load_extra_admin_ids(CONFIG.project_dir))
     extra_txt = ", ".join(str(i) for i in extra) if extra else "—"
-    return (
-        "<b>Админы</b> (раздел «Админ» у них в меню). Бот для всех остальных без ограничений.\n"
-        f".env: <code>{env_admins}</code>\n"
-        f"через бота: <code>{extra_txt}</code>\n"
-        "Добавить — кнопка ниже (ID). Удалить 🗑 — только добавленных через бота; из .env — только в файле .env."
-    )
+    return f"Админы. .env: {env_admins}. Бот: {extra_txt}. + добавить, 🗑 снять (только из бота)."
 
 
 def _deeplinks_manage_text() -> str:
     base = ", ".join(d.id for d in CONFIG.deeplinks)
     extra = ", ".join(d.id for d in load_extra_deeplinks(CONFIG.project_dir)) or "—"
-    return (
-        "<b>Доп. диплинки</b>\n"
-        f"Уже в settings.json: {base}. Уже добавлены сюда: {extra}.\n"
-        "Добавление — по шагам в чате (без JSON). Сейчас мастер создаёт один маркетплейс Wildberries, "
-        "как в обычном сценарии бота. Свой API-ключ — в .env в переменную, которую укажете на шаге 3.\n"
-        "Удалить можно только доп. диплинки (🗑), не те что в settings.json."
-    )
+    return f"Диплинки. settings: {base}. доп.: {extra}. + мастер (WB). 🗑 только доп."
 
 
 @router.message(or_f(F.text == "Админ", Command("admin")))
@@ -568,11 +559,7 @@ async def admin_panel_handler(message: Message) -> None:
         await deny_admin_only(message)
         return
 
-    await message.answer(
-        "<b>Админ-панель</b>\n\n"
-        "Форматы публикаций, администраторы и дополнительные диплинки.",
-        reply_markup=admin_panel_keyboard(),
-    )
+    await message.answer("Админка:", reply_markup=admin_panel_keyboard())
 
 
 @router.callback_query(F.data == "admin:formats")
@@ -651,9 +638,7 @@ async def admins_add_start(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(AdminAddAdminStates.waiting_telegram_id)
     await callback.message.answer(
-        "Отправьте числовой Telegram ID нового администратора (только цифры, 5–15 символов).\n"
-        "Права будут такие же, как у вас.\n"
-        "/cancel — отмена."
+        "ID нового админа (цифры). /cancel"
     )
 
 
@@ -738,8 +723,7 @@ async def deeplinks_add_start(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.answer()
     await state.set_state(DeeplinkWizardStates.waiting_id)
     await callback.message.answer(
-        "Шаг 1 из 5: короткий код диплинка (латиница, цифры, подчёркивание), например <code>second</code>.\n"
-        "/cancel — отмена."
+        "1/5 Код диплинка (латиница, _), напр. second. /cancel"
     )
 
 
@@ -780,7 +764,7 @@ async def deeplink_wiz_id(message: Message, state: FSMContext) -> None:
 
     parsed = _deeplink_wizard_parse_id(message.text or "")
     if not parsed:
-        await message.answer("Нужна одна строка: латиница с цифрами/_, до 40 символов. Или /cancel.")
+        await message.answer("Неверный код. /cancel")
         return
 
     taken = {d.id for d in CONFIG.deeplinks} | {d.id for d in load_extra_deeplinks(CONFIG.project_dir)}
@@ -790,7 +774,7 @@ async def deeplink_wiz_id(message: Message, state: FSMContext) -> None:
 
     await state.update_data(wiz_id=parsed)
     await state.set_state(DeeplinkWizardStates.waiting_label)
-    await message.answer("Шаг 2 из 5: подпись к кнопке выбора диплинка (как вам удобно), до 80 символов.")
+    await message.answer("2/5 Подпись кнопки (до 80 симв.)")
 
 
 @router.message(DeeplinkWizardStates.waiting_label)
@@ -805,16 +789,12 @@ async def deeplink_wiz_label(message: Message, state: FSMContext) -> None:
 
     label = (message.text or "").strip()
     if not label or len(label) > 80:
-        await message.answer("Подпись от 1 до 80 символов. Или /cancel.")
+        await message.answer("1–80 символов.")
         return
 
     await state.update_data(wiz_label=label)
     await state.set_state(DeeplinkWizardStates.waiting_api_key_env)
-    await message.answer(
-        "Шаг 3 из 5: имя переменной для ключа API в .env (большими буквами), например "
-        "<code>MOBZ_API_KEY_SECOND</code>.\n"
-        "После добавления диплинка на сервере вставьте в .env строку: <code>ИМЯ=ключ_от_Mobz</code>."
-    )
+    await message.answer("3/5 Переменная в .env для ключа, напр. MOBZ_API_KEY_SECOND")
 
 
 @router.message(DeeplinkWizardStates.waiting_api_key_env)
@@ -829,14 +809,12 @@ async def deeplink_wiz_api_env(message: Message, state: FSMContext) -> None:
 
     envv = _deeplink_wizard_parse_api_env(message.text or "")
     if not envv:
-        await message.answer("Нужно как у переменной окружения: MOBZ_API_KEY_… (латиница, цифры, _). /cancel")
+        await message.answer("Неверно. Пример: MOBZ_API_KEY_SECOND")
         return
 
     await state.update_data(wiz_api_env=envv)
     await state.set_state(DeeplinkWizardStates.waiting_domain)
-    await message.answer(
-        "Шаг 4 из 5: домен диплинка <b>без</b> https — как в Mobz, например <code>myshop.mobz.link</code>."
-    )
+    await message.answer("4/5 Домен без https, напр. shop.mobz.link")
 
 
 @router.message(DeeplinkWizardStates.waiting_domain)
@@ -851,16 +829,12 @@ async def deeplink_wiz_domain(message: Message, state: FSMContext) -> None:
 
     dom = _deeplink_wizard_parse_domain(message.text or "")
     if not dom:
-        await message.answer("Нужен домен вида shop.mobz.link без пробелов и без /. Или /cancel.")
+        await message.answer("Неверный домен.")
         return
 
     await state.update_data(wiz_domain=dom)
     await state.set_state(DeeplinkWizardStates.waiting_folders)
-    await message.answer(
-        "Шаг 5 из 5: папки Wildberries в Mobz — через запятую, как в кабинете.\n"
-        "Пример: <code>Без папки, tiktok ads</code>\n"
-        "Если без папок — отправьте <code>0</code>."
-    )
+    await message.answer("5/5 Папки WB через запятую (как в Mobz) или 0")
 
 
 @router.message(DeeplinkWizardStates.waiting_folders)
@@ -899,8 +873,7 @@ async def deeplink_wiz_folders(message: Message, state: FSMContext) -> None:
     await state.clear()
     refresh_mobz_client()
     await message.answer(
-        f"Диплинк <code>{raw['id']}</code> добавлен. В .env добавьте: <code>{raw['api_key_env']}=…ключ…</code>\n"
-        "Перезапустите бота на сервере, если ключ добавляли впервые.",
+        f"Диплинк {raw['id']} готов. В .env: {raw['api_key_env']}=ключ. Перезапуск сервиса.",
         reply_markup=main_menu(uid),
     )
     await message.answer(
@@ -920,12 +893,7 @@ async def formats_add_start(callback: CallbackQuery, state: FSMContext) -> None:
 
     await callback.answer()
     await state.set_state(FormatManageStates.entering_line)
-    await callback.message.answer(
-        "Отправьте одну строку в формате:\n"
-        "<code>код|подпись|суффикс</code>\n"
-        "Например: <code>tgads|TG реклама|tgads</code>\n\n"
-        "/cancel — отмена."
-    )
+    await callback.message.answer("Строка: код|подпись|суффикс  /cancel")
 
 
 @router.callback_query(F.data.startswith("formats:del:"))
@@ -1281,6 +1249,28 @@ async def token_received(message: Message, state: FSMContext) -> None:
     )
 
 
+async def _answer_stats_period(message: Message, start_date: date, end_date: date) -> None:
+    try:
+        rows = await MOBZ.stats_for_period(start_date, end_date)
+    except RuntimeError as exc:
+        await message.answer(str(exc))
+        return
+
+    with_clicks = [item for item in rows if item.get("clicks", 0) > 0]
+    if not with_clicks:
+        await message.answer("За период кликов нет.")
+        return
+
+    with_clicks.sort(key=lambda item: item.get("clicks", 0), reverse=True)
+    max_lines = 40
+    chunk = with_clicks[:max_lines]
+    lines = [f"{item['short_url']} — {item['clicks']}" for item in chunk]
+    extra = len(with_clicks) - len(chunk)
+    if extra > 0:
+        lines.append(f"… ещё {extra}")
+    await message.answer("\n".join(lines))
+
+
 @router.callback_query(F.data == "stats:period")
 async def stats_period_callback(callback: CallbackQuery, state: FSMContext) -> None:
     if not can_use_bot(callback.from_user.id if callback.from_user else None):
@@ -1289,11 +1279,8 @@ async def stats_period_callback(callback: CallbackQuery, state: FSMContext) -> N
 
     await callback.answer()
     await state.set_state(StatsStates.entering_period)
-    await callback.message.answer(
-        "Введите период: <code>ДД.ММ.ГГГГ-ДД.ММ.ГГГГ</code> (дефис между датами).\n"
-        "Пример: <code>01.10.2026-03.10.2026</code> или <code>13.04.2026-13.04.2026</code>.\n"
-        "День и месяц — числами через точку; лишний ноль в дне (013) тоже поймётся."
-    )
+    if callback.message:
+        await callback.message.answer("Введите период: ДД.ММ.ГГГГ-ДД.ММ.ГГГГ")
 
 
 @router.message(StatsStates.entering_period)
@@ -1304,34 +1291,12 @@ async def stats_period_received(message: Message, state: FSMContext) -> None:
 
     period = parse_period(message.text or "")
     if not period:
-        await message.answer(
-            "Не получилось разобрать период. Нужно: <code>ДД.ММ.ГГГГ-ДД.ММ.ГГГГ</code>, "
-            "например <code>13.04.2026-13.04.2026</code> (проверьте дефис и две даты)."
-        )
+        await message.answer("Период: ДД.ММ.ГГГГ-ДД.ММ.ГГГГ")
         return
 
     start_date, end_date = period
     await state.clear()
-
-    try:
-        rows = await MOBZ.stats_for_period(start_date, end_date)
-    except RuntimeError as exc:
-        await message.answer(str(exc))
-        return
-
-    with_clicks = [item for item in rows if item.get("clicks", 0) > 0]
-    if not with_clicks:
-        await message.answer("За выбранный период кликов не найдено.")
-        return
-
-    with_clicks.sort(key=lambda item: item.get("clicks", 0), reverse=True)
-    max_lines = 40
-    chunk = with_clicks[:max_lines]
-    lines = [f"{item['short_url']} - {item['clicks']} кликов" for item in chunk]
-    extra = len(with_clicks) - len(chunk)
-    if extra > 0:
-        lines.append(f"… и ещё {extra} ссылок с кликами (лимит вывода {max_lines}).")
-    await message.answer("\n".join(lines))
+    await _answer_stats_period(message, start_date, end_date)
 
 
 @router.callback_query(F.data == "stats:hint")
@@ -1341,9 +1306,7 @@ async def stats_hint_callback(callback: CallbackQuery) -> None:
         return
 
     await callback.answer()
-    await callback.message.answer(
-        "Для статистики по одной ссылке откройте её через раздел «Мои ссылки» и нажмите «Стата по ссылке»."
-    )
+    await callback.message.answer("Мои ссылки → карточка → «Стата по ссылке».")
 
 
 @router.callback_query(F.data.startswith("stats_link:"))
@@ -1377,10 +1340,14 @@ async def fallback_handler(message: Message) -> None:
         await deny_access(message)
         return
 
-    await message.answer(
-        "Используйте кнопки меню ниже или команду /start.",
-        reply_markup=main_menu(uid),
-    )
+    text = (message.text or "").strip()
+    period = parse_period(text)
+    if period:
+        start_date, end_date = period
+        await _answer_stats_period(message, start_date, end_date)
+        return
+
+    await message.answer("Меню или /start.", reply_markup=main_menu(uid))
 
 
 async def build_bot() -> Bot:

@@ -186,6 +186,23 @@ def parse_day_month(value: str) -> str | None:
     return value
 
 
+def _parse_date_dmY(part: str) -> date | None:
+    """ДД.ММ.ГГГГ с допуском ведущих нулей (например 013.04.2026 → 13.04.2026)."""
+    chunks = [c.strip() for c in part.strip().split(".") if c.strip()]
+    if len(chunks) != 3:
+        return None
+    try:
+        d, m, y = int(chunks[0]), int(chunks[1]), int(chunks[2])
+    except ValueError:
+        return None
+    if y < 2000 or y > 2100:
+        return None
+    try:
+        return date(y, m, d)
+    except ValueError:
+        return None
+
+
 def parse_period(value: str) -> tuple[date, date] | None:
     cleaned = value.strip().replace(" ", "")
     cleaned = cleaned.replace("–", "-").replace("—", "-").replace("−", "-")
@@ -193,10 +210,9 @@ def parse_period(value: str) -> tuple[date, date] | None:
     if len(parts) != 2:
         return None
 
-    try:
-        start_date = datetime.strptime(parts[0], "%d.%m.%Y").date()
-        end_date = datetime.strptime(parts[1], "%d.%m.%Y").date()
-    except ValueError:
+    start_date = _parse_date_dmY(parts[0])
+    end_date = _parse_date_dmY(parts[1])
+    if start_date is None or end_date is None:
         return None
 
     if start_date > end_date:
@@ -1163,7 +1179,9 @@ async def stats_period_callback(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer()
     await state.set_state(StatsStates.entering_period)
     await callback.message.answer(
-        "Введите период в формате ДД.ММ.ГГГГ-ДД.ММ.ГГГГ, например 01.10.2026-03.10.2026"
+        "Введите период: <code>ДД.ММ.ГГГГ-ДД.ММ.ГГГГ</code> (дефис между датами).\n"
+        "Пример: <code>01.10.2026-03.10.2026</code> или <code>13.04.2026-13.04.2026</code>.\n"
+        "День и месяц — числами через точку; лишний ноль в дне (013) тоже поймётся."
     )
 
 
@@ -1175,7 +1193,10 @@ async def stats_period_received(message: Message, state: FSMContext) -> None:
 
     period = parse_period(message.text or "")
     if not period:
-        await message.answer("Неверный формат периода. Пример: 01.10.2026-03.10.2026")
+        await message.answer(
+            "Не получилось разобрать период. Нужно: <code>ДД.ММ.ГГГГ-ДД.ММ.ГГГГ</code>, "
+            "например <code>13.04.2026-13.04.2026</code> (проверьте дефис и две даты)."
+        )
         return
 
     start_date, end_date = period

@@ -691,11 +691,21 @@ async def token_received(message: Message, state: FSMContext) -> None:
 async def _answer_stats_period(message: Message, start_date: date, end_date: date) -> None:
     if MOBZ.supports_live_stats:
         await message.answer(
-            f"⏳ Считаю клики за {start_date:%d.%m.%Y}—{end_date:%d.%m.%Y} через Mobz: "
-            "обхожу все ссылки аккаунта, обычно 1–3 минуты. Пожалуйста, подождите."
+            f"⏳ Считаю клики за {start_date:%d.%m.%Y}\u2014{end_date:%d.%m.%Y} через Mobz: "
+            "обычно 1\u20133 минуты. Пожалуйста, подождите."
         )
     try:
-        rows = await MOBZ.stats_for_period(start_date, end_date)
+        bot_links = [
+            r
+            for r in STORE.list_all_links()
+            if str(r.get("external_id") or "").strip()
+        ]
+        if bot_links:
+            rows = await MOBZ.stats_for_period(
+                start_date, end_date, link_records=bot_links
+            )
+        else:
+            rows = await MOBZ.stats_for_period(start_date, end_date)
     except RuntimeError as exc:
         await message.answer(str(exc))
         return

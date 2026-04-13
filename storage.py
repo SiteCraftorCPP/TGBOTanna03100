@@ -50,6 +50,15 @@ class JsonStorage:
         )
         return links[:limit]
 
+    def list_all_links(self) -> list[dict[str, Any]]:
+        """Все карточки (для статистики за период по ссылкам бота, без обхода всего аккаунта Mobz)."""
+        data = self._read()
+        return sorted(
+            data["links"],
+            key=lambda item: item.get("created_at", ""),
+            reverse=True,
+        )
+
     def get_link(self, link_id: str) -> dict[str, Any] | None:
         data = self._read()
         for item in data["links"]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import date, datetime, time, timezone
@@ -262,40 +263,57 @@ class HttpMobzClient(MobzClient):
 
         return msg_rows
 
-    async def stats_for_period(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
-        deeplink_id = self.api.default_deeplink_id or next(iter(self._deeplink_index))
+    async def stats_for_period(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        link_records: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Клики за период по GET /api/public/stats для каждой ссылки (одного запроса «на весь аккаунт» у Mobz нет).
+
+        Если передан ``link_records`` (карточки из бота с ``external_id``), обходим только их — быстро.
+        Иначе тянем полный ``mylinks`` и считаем по всем ссылкам аккаунта (может быть долго).
+        """
+        default_dl = self.api.default_deeplink_id or next(iter(self._deeplink_index))
         ts_from, ts_to = self._period_timestamps(start_date, end_date)
 
-        # Без stats=1: полный список легче для шлюза; stats=1 часто даёт 504 при большом аккаунте.
-        listing = await self._get_json(
-            deeplink_id,
-            "/api/public/mylinks",
-            {},
-            timeout_total=300,
-        )
-        links_raw = listing.get("message")
-        if links_raw is None:
-            links_raw = listing.get("result")
-        if not isinstance(links_raw, list):
-            raise RuntimeError(f"Mobz mylinks: ожидался список ссылок: {listing!r}")
+        triples: list[tuple[str, str, str]] = []
 
-        rows: list[dict[str, Any]] = []
-        timeout = aiohttp.ClientTimeout(total=180)
-        api_key = self._api_key_for(deeplink_id)
-        headers = self._headers(api_key)
-
-        def _iter_mylink_entries(raw: list[Any]) -> Iterator[dict[str, Any]]:
-            for item in raw:
-                if not isinstance(item, dict):
+        if link_records is not None:
+            for rec in link_records:
+                ext = str(rec.get("external_id") or "").strip()
+                if not ext:
                     continue
-                if item.get("link_id") is not None:
-                    yield item
-                    continue
-                for value in item.values():
-                    if isinstance(value, dict) and value.get("link_id") is not None:
-                        yield value
+                did = str(rec.get("deeplink_id") or "").strip() or default_dl
+                surl = str(rec.get("short_url") or "").strip()
+                if surl and not surl.startswith("http"):
+                    surl = _normalize_url(surl)
+                triples.append((did, ext, surl or ext))
+        else:
+            listing = await self._get_json(
+                default_dl,
+                "/api/public/mylinks",
+                {},
+                timeout_total=300,
+            )
+            links_raw = listing.get("message")
+            if links_raw is None:
+                links_raw = listing.get("result")
+            if not isinstance(links_raw, list):
+                raise RuntimeError(f"Mobz mylinks: ожидался список ссылок: {listing!r}")
 
-        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            def _iter_mylink_entries(raw: list[Any]) -> Iterator[dict[str, Any]]:
+                for item in raw:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("link_id") is not None:
+                        yield item
+                        continue
+                    for value in item.values():
+                        if isinstance(value, dict) and value.get("link_id") is not None:
+                            yield value
+
             for item in _iter_mylink_entries(links_raw):
                 link_id = item.get("link_id")
                 if link_id is None:
@@ -303,17 +321,34 @@ class HttpMobzClient(MobzClient):
                 link_label = item.get("link") or item.get("shortcode") or str(link_id)
                 raw_link = str(link_label).strip()
                 url = raw_link if raw_link.startswith("http") else _normalize_url(raw_link)
+                triples.append((default_dl, str(link_id), url))
 
-                clicks = await self._stats_clicks_for_link_period(
-                    session,
-                    headers,
-                    str(link_id),
-                    ts_from,
-                    ts_to,
-                )
-                rows.append({"short_url": url, "clicks": clicks})
+        if not triples:
+            return []
 
-        return rows
+        concurrency = 16
+        sem = asyncio.Semaphore(concurrency)
+        timeout = aiohttp.ClientTimeout(total=180)
+
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+
+            async def _clicks_triple(deeplink_id: str, link_id: str, url: str) -> dict[str, Any]:
+                async with sem:
+                    headers = self._headers(self._api_key_for(deeplink_id))
+                    clicks = await self._stats_clicks_for_link_period(
+                        session,
+                        headers,
+                        link_id,
+                        ts_from,
+                        ts_to,
+                    )
+                return {"short_url": url, "clicks": clicks}
+
+            rows = await asyncio.gather(
+                *(_clicks_triple(did, lid, u) for did, lid, u in triples),
+            )
+
+        return list(rows)
 
     async def _stats_clicks_for_link_period(
         self,

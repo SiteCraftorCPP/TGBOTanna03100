@@ -33,7 +33,13 @@ class MobzClient:
     async def attach_marking_token(self, link_record: dict[str, Any], token: str) -> dict[str, Any]:
         raise NotImplementedError
 
-    async def stats_for_period(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
+    async def stats_for_period(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        link_records: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         raise NotImplementedError
 
     async def stats_for_link(self, link_record: dict[str, Any]) -> dict[str, Any]:
@@ -52,7 +58,13 @@ class MockMobzClient(MobzClient):
             "token_status": "applied",
         }
 
-    async def stats_for_period(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
+    async def stats_for_period(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        link_records: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         raise RuntimeError(
             "Статистика кликов недоступна в mock-режиме. Нужны точные эндпоинты Mobz API."
         )

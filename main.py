@@ -689,15 +689,26 @@ async def token_received(message: Message, state: FSMContext) -> None:
 
 
 async def _answer_stats_period(message: Message, start_date: date, end_date: date) -> None:
+    if MOBZ.supports_live_stats:
+        await message.answer(
+            f"⏳ Считаю клики за {start_date:%d.%m.%Y}—{end_date:%d.%m.%Y} через Mobz: "
+            "обхожу все ссылки аккаунта, обычно 1–3 минуты. Пожалуйста, подождите."
+        )
     try:
         rows = await MOBZ.stats_for_period(start_date, end_date)
     except RuntimeError as exc:
         await message.answer(str(exc))
         return
+    except Exception as exc:
+        await message.answer(f"Не удалось получить статистику за период: {exc}")
+        return
 
     with_clicks = [item for item in rows if item.get("clicks", 0) > 0]
     if not with_clicks:
-        await message.answer("За период кликов нет.")
+        await message.answer(
+            "За этот период по данным Mobz нет кликов ни по одной из ваших ссылок "
+            "(или все значения 0). Попробуйте другой диапазон дат."
+        )
         return
 
     with_clicks.sort(key=lambda item: item.get("clicks", 0), reverse=True)

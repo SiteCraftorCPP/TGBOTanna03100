@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from datetime import date, datetime
 from typing import Any
@@ -54,8 +53,12 @@ class AdminAddAdminStates(StatesGroup):
     waiting_telegram_id = State()
 
 
-class AdminDeeplinkStates(StatesGroup):
-    waiting_json = State()
+class DeeplinkWizardStates(StatesGroup):
+    waiting_id = State()
+    waiting_label = State()
+    waiting_api_key_env = State()
+    waiting_domain = State()
+    waiting_folders = State()
 
 
 router = Router()
@@ -221,6 +224,38 @@ def parse_period(value: str) -> tuple[date, date] | None:
     return start_date, end_date
 
 
+_DL_WIZ_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$", re.IGNORECASE)
+_API_KEY_ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
+
+
+def _deeplink_wizard_parse_id(value: str) -> str | None:
+    s = value.strip().lower()
+    if not _DL_WIZ_ID_RE.match(s):
+        return None
+    return s
+
+
+def _deeplink_wizard_parse_api_env(value: str) -> str | None:
+    s = value.strip().upper()
+    if not _API_KEY_ENV_RE.match(s):
+        return None
+    return s
+
+
+def _deeplink_wizard_parse_domain(value: str) -> str | None:
+    s = value.strip().lower().replace("https://", "").replace("http://", "").rstrip("/")
+    if not s or " " in s or "/" in s or "." not in s:
+        return None
+    return s
+
+
+def _deeplink_wizard_parse_folders(value: str) -> list[str]:
+    s = value.strip()
+    if not s or s in {"-", "0", "нет", "no"}:
+        return []
+    return [p.strip() for p in re.split(r"[\n,;]+", s) if p.strip()]
+
+
 def build_short_code(blogger_slug: str, date_value: str, format_slug: str, marketplace_suffix: str) -> str:
     date_slug = date_value.replace(".", "")
     return f"{blogger_slug}{date_slug}{format_slug}{marketplace_suffix}"
@@ -301,7 +336,7 @@ def deeplinks_manage_keyboard():
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
-            text="➕ Добавить диплинк (JSON)",
+            text="➕ Добавить диплинк",
             callback_data="deeplinks:add",
         )
     )
@@ -492,20 +527,10 @@ async def stats_handler(message: Message) -> None:
 def _formats_manage_text() -> str:
     base = ", ".join(f.id for f in CONFIG.formats)
     return (
-        "<b>Форматы публикаций</b>\n\n"
-        "Базовый список задаётся в <code>settings.json</code> "
-        f"(сейчас: {base}).\n\n"
-        "Дополнительные форматы сохраняются в "
-        "<code>data/formats_extra.json</code> и сразу появляются в шаге "
-        "«Выберите формат» при создании ссылки (для всех, кто может пользоваться ботом).\n\n"
-        "<b>Добавить:</b> нажмите кнопку ниже и отправьте одну строку "
-        "(три поля через символ |):\n"
-        "<code>код|подпись в кнопке|суффикс в шорткоде</code>\n"
-        "Пример: <code>reels|Reels|reels</code>\n\n"
-        "Код и суффикс — латиница, цифры, подчёркивание; суффикс может быть пустым "
-        "(как у «без формата» в базовом списке). Код не должен совпадать с уже "
-        "существующим в settings.json.\n\n"
-        "Удалить свой формат можно кнопкой 🗑 под списком."
+        "<b>Форматы</b>\n"
+        f"Базовые (в settings.json): {base}.\n"
+        "Свои — кнопка ниже, одна строка: <code>код|подпись|суффикс</code> "
+        "пример <code>reels|Reels|reels</code>. Удаление — 🗑 только у своих."
     )
 
 
@@ -514,30 +539,22 @@ def _admins_manage_text() -> str:
     extra = sorted(load_extra_admin_ids(CONFIG.project_dir))
     extra_txt = ", ".join(str(i) for i in extra) if extra else "—"
     return (
-        "<b>Администраторы</b>\n\n"
-        "Бот <b>доступен всем</b> пользователям Telegram. Администраторы — это те, "
-        "у кого есть раздел «Админ» и настройки (форматы, диплинки, список админов). "
-        "Права у всех админов <b>равные</b>.\n\n"
-        f"Из <code>.env</code> (TELEGRAM_ADMIN_IDS): <code>{env_admins}</code>\n"
-        f"Добавлены в боте (<code>data/extra_admins.json</code>): <code>{extra_txt}</code>\n\n"
-        "Удалить кнопкой 🗑 можно только администраторов из файла бота; из .env — только вручную в .env.\n"
-        "ID можно узнать через @userinfobot."
+        "<b>Админы</b> (раздел «Админ» у них в меню). Бот для всех остальных без ограничений.\n"
+        f".env: <code>{env_admins}</code>\n"
+        f"через бота: <code>{extra_txt}</code>\n"
+        "Добавить — кнопка ниже (ID). Удалить 🗑 — только добавленных через бота; из .env — только в файле .env."
     )
 
 
 def _deeplinks_manage_text() -> str:
     base = ", ".join(d.id for d in CONFIG.deeplinks)
+    extra = ", ".join(d.id for d in load_extra_deeplinks(CONFIG.project_dir)) or "—"
     return (
-        "<b>Дополнительные диплинки</b>\n\n"
-        f"Из <code>settings.json</code> сейчас: <code>{base}</code>.\n\n"
-        "Сюда можно добавить ещё диплинки (отдельный API-ключ в .env по полю "
-        "<code>api_key_env</code>). Данные пишутся в "
-        "<code>data/deeplinks_extra.json</code>.\n\n"
-        "<b>Добавить:</b> один JSON-объект — как один элемент массива "
-        "<code>deeplinks</code> в settings.json "
-        "(поля id, label, api_key_env, default_domain, marketplaces).\n\n"
-        "<b>Удалить</b> можно только дополнительные диплинки, не из settings.json.\n\n"
-        "После изменений убедитесь, что в .env заданы переменные для ключей."
+        "<b>Доп. диплинки</b>\n"
+        f"Уже в settings.json: {base}. Уже добавлены сюда: {extra}.\n"
+        "Добавление — по шагам в чате (без JSON). Сейчас мастер создаёт один маркетплейс Wildberries, "
+        "как в обычном сценарии бота. Свой API-ключ — в .env в переменную, которую укажете на шаге 3.\n"
+        "Удалить можно только доп. диплинки (🗑), не те что в settings.json."
     )
 
 
@@ -719,10 +736,9 @@ async def deeplinks_add_start(callback: CallbackQuery, state: FSMContext) -> Non
         return
 
     await callback.answer()
-    await state.set_state(AdminDeeplinkStates.waiting_json)
+    await state.set_state(DeeplinkWizardStates.waiting_id)
     await callback.message.answer(
-        "Пришлите <b>один</b> JSON-объект диплинка (как элемент массива "
-        "<code>deeplinks</code> в settings.json). Можно одним сообщением.\n"
+        "Шаг 1 из 5: короткий код диплинка (латиница, цифры, подчёркивание), например <code>second</code>.\n"
         "/cancel — отмена."
     )
 
@@ -752,8 +768,8 @@ async def deeplinks_delete_callback(callback: CallbackQuery) -> None:
     )
 
 
-@router.message(AdminDeeplinkStates.waiting_json, F.text)
-async def deeplinks_json_received(message: Message, state: FSMContext) -> None:
+@router.message(DeeplinkWizardStates.waiting_id)
+async def deeplink_wiz_id(message: Message, state: FSMContext) -> None:
     uid = message.from_user.id if message.from_user else None
     if not can_use_bot(uid):
         await deny_access(message)
@@ -762,34 +778,129 @@ async def deeplinks_json_received(message: Message, state: FSMContext) -> None:
         await deny_admin_only(message)
         return
 
-    raw_text = (message.text or "").strip()
-    try:
-        obj: Any = json.loads(raw_text)
-    except json.JSONDecodeError:
-        await message.answer("Не удалось разобрать JSON. Проверьте кавычки и запятые или /cancel.")
+    parsed = _deeplink_wizard_parse_id(message.text or "")
+    if not parsed:
+        await message.answer("Нужна одна строка: латиница с цифрами/_, до 40 символов. Или /cancel.")
         return
 
-    if isinstance(obj, list):
-        if len(obj) == 1 and isinstance(obj[0], dict):
-            obj = obj[0]
-        else:
-            await message.answer("Нужен один объект {...} или массив из одного объекта.")
-            return
-
-    if not isinstance(obj, dict):
-        await message.answer("Нужен JSON-объект с полями диплинка.")
+    taken = {d.id for d in CONFIG.deeplinks} | {d.id for d in load_extra_deeplinks(CONFIG.project_dir)}
+    if parsed in taken:
+        await message.answer("Такой код уже занят. Введите другой.")
         return
 
+    await state.update_data(wiz_id=parsed)
+    await state.set_state(DeeplinkWizardStates.waiting_label)
+    await message.answer("Шаг 2 из 5: подпись к кнопке выбора диплинка (как вам удобно), до 80 символов.")
+
+
+@router.message(DeeplinkWizardStates.waiting_label)
+async def deeplink_wiz_label(message: Message, state: FSMContext) -> None:
+    uid = message.from_user.id if message.from_user else None
+    if not can_use_bot(uid):
+        await deny_access(message)
+        return
+    if not is_admin(uid):
+        await deny_admin_only(message)
+        return
+
+    label = (message.text or "").strip()
+    if not label or len(label) > 80:
+        await message.answer("Подпись от 1 до 80 символов. Или /cancel.")
+        return
+
+    await state.update_data(wiz_label=label)
+    await state.set_state(DeeplinkWizardStates.waiting_api_key_env)
+    await message.answer(
+        "Шаг 3 из 5: имя переменной для ключа API в .env (большими буквами), например "
+        "<code>MOBZ_API_KEY_SECOND</code>.\n"
+        "После добавления диплинка на сервере вставьте в .env строку: <code>ИМЯ=ключ_от_Mobz</code>."
+    )
+
+
+@router.message(DeeplinkWizardStates.waiting_api_key_env)
+async def deeplink_wiz_api_env(message: Message, state: FSMContext) -> None:
+    uid = message.from_user.id if message.from_user else None
+    if not can_use_bot(uid):
+        await deny_access(message)
+        return
+    if not is_admin(uid):
+        await deny_admin_only(message)
+        return
+
+    envv = _deeplink_wizard_parse_api_env(message.text or "")
+    if not envv:
+        await message.answer("Нужно как у переменной окружения: MOBZ_API_KEY_… (латиница, цифры, _). /cancel")
+        return
+
+    await state.update_data(wiz_api_env=envv)
+    await state.set_state(DeeplinkWizardStates.waiting_domain)
+    await message.answer(
+        "Шаг 4 из 5: домен диплинка <b>без</b> https — как в Mobz, например <code>myshop.mobz.link</code>."
+    )
+
+
+@router.message(DeeplinkWizardStates.waiting_domain)
+async def deeplink_wiz_domain(message: Message, state: FSMContext) -> None:
+    uid = message.from_user.id if message.from_user else None
+    if not can_use_bot(uid):
+        await deny_access(message)
+        return
+    if not is_admin(uid):
+        await deny_admin_only(message)
+        return
+
+    dom = _deeplink_wizard_parse_domain(message.text or "")
+    if not dom:
+        await message.answer("Нужен домен вида shop.mobz.link без пробелов и без /. Или /cancel.")
+        return
+
+    await state.update_data(wiz_domain=dom)
+    await state.set_state(DeeplinkWizardStates.waiting_folders)
+    await message.answer(
+        "Шаг 5 из 5: папки Wildberries в Mobz — через запятую, как в кабинете.\n"
+        "Пример: <code>Без папки, tiktok ads</code>\n"
+        "Если без папок — отправьте <code>0</code>."
+    )
+
+
+@router.message(DeeplinkWizardStates.waiting_folders)
+async def deeplink_wiz_folders(message: Message, state: FSMContext) -> None:
+    uid = message.from_user.id if message.from_user else None
+    if not can_use_bot(uid):
+        await deny_access(message)
+        return
+    if not is_admin(uid):
+        await deny_admin_only(message)
+        return
+
+    data = await state.get_data()
+    folders = _deeplink_wizard_parse_folders(message.text or "")
+    raw: dict[str, Any] = {
+        "id": data["wiz_id"],
+        "label": data["wiz_label"],
+        "api_key_env": data["wiz_api_env"],
+        "default_domain": data["wiz_domain"],
+        "marketplaces": [
+            {
+                "id": "wb",
+                "label": "Wildberries",
+                "suffix": "wb",
+                "notification_label": "WB",
+                "folders": folders,
+            }
+        ],
+    }
     base_ids = {d.id for d in CONFIG.deeplinks}
-    err = add_extra_deeplink(CONFIG.project_dir, obj, base_ids)
+    err = add_extra_deeplink(CONFIG.project_dir, raw, base_ids)
     if err:
-        await message.answer(f"{err}\nИсправьте и отправьте снова или /cancel.")
+        await message.answer(f"{err}\nПопробуйте снова с шага 1 или /cancel.")
         return
 
     await state.clear()
     refresh_mobz_client()
     await message.answer(
-        f"Диплинк <code>{obj.get('id', '')}</code> добавлен. Клиент Mobz обновлён.",
+        f"Диплинк <code>{raw['id']}</code> добавлен. В .env добавьте: <code>{raw['api_key_env']}=…ключ…</code>\n"
+        "Перезапустите бота на сервере, если ключ добавляли впервые.",
         reply_markup=main_menu(uid),
     )
     await message.answer(

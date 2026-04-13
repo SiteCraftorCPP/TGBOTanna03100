@@ -8,7 +8,7 @@ Telegram-бот для менеджера диплинков Mobz.
 - **`http`** — официальный публичный API Mobz:
   - ключ в заголовке **`Authorization`** (значение = сам API-ключ, без префикса `Bearer`, если иное не задано в `settings.json`);
   - **`POST /api/public/addlink`** — создание;
-  - **`POST /api/public/editlink`** — правка (ЕРИД по умолчанию пишется в поле `urlnote`, см. `editlink_token_field`);
+  - **`POST /api/public/editlink`** — правка (ЕРИД по умолчанию в параметр `erid`; в публичной доке отдельно не описан — при необходимости задайте имя в `editlink_token_field` по подсказке поддержки Mobz);
   - **`GET /api/public/mylinks`** — список ссылок (в боте вызывается **без** `stats=1`: с `stats=1` у крупных аккаунтов часто **504** от nginx, без параметра ответ может быть большим и долго скачиваться — таймаут запроса увеличен до 300 с);
   - **`GET /api/public/onelink`** — одна ссылка и агрегированная статистика (`stats.all`);
   - **`GET /api/public/stats`** — клики за период (для отчёта «за период» бот обходит ссылки из `mylinks` и суммирует постранично);
@@ -22,7 +22,7 @@ Telegram-бот для менеджера диплинков Mobz.
 |------|------------|
 | `origin` | Базовый URL, по умолчанию `https://mobz.io` |
 | `auth_header` | Имя заголовка с ключом, по умолчанию `Authorization` |
-| `editlink_token_field` | Поле для ЕРИД при `editlink`, по умолчанию `urlnote` |
+| `editlink_token_field` | Имя POST-параметра для ЕРИД при `editlink`, по умолчанию `erid` |
 | `default_deeplink_id` | Какой диплинк из `deeplinks` использовать для запросов без привязки к карточке (например статистика за период) |
 | `stats_unique_only` | Передавать `clean=1` в `onelink` и `stats` |
 | `marketplace_link_types` | Для каждого `marketplace id`: `type` и `url_field` для `addlink` (как в API Mobz: WB — `wildberries`/`wildberries`, Ozon — `ozon`/`ozon`, Золотое яблоко — `goldapple`/`goldapple`, Лэтуаль — `letual`/`letual`) |
@@ -50,7 +50,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-В `.env`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_IDS`, при необходимости `TELEGRAM_PROXY`.
+В `.env`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_IDS` (один или несколько id через запятую), при необходимости `TELEGRAM_PROXY`. Бот открыт для любого пользователя Telegram; админы из `.env` и из `data/extra_admins.json` (добавляются в боте) имеют раздел «Админ» и равные права.
 
 ## Деплой на VPS (systemd)
 

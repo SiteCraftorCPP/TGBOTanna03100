@@ -227,7 +227,7 @@ class HttpMobzClient(MobzClient):
     async def attach_marking_token(self, link_record: dict[str, Any], token: str) -> dict[str, Any]:
         deeplink_id = str(link_record["deeplink_id"])
         shortcode = str(link_record["short_code"])
-        field = self.api.editlink_token_field.strip() or "urlnote"
+        field = self.api.editlink_token_field.strip() or "erid"
 
         data: dict[str, Any] = {"shortcode": shortcode, field: token}
         source = str(link_record.get("source_url") or "").strip()
@@ -242,21 +242,25 @@ class HttpMobzClient(MobzClient):
         end_dt = datetime.combine(end_date, time.max, tzinfo=tz)
         return int(start_dt.timestamp()), int(end_dt.timestamp())
 
-    def _count_stats_payload(self, payload: dict[str, Any]) -> int:
+    def _stats_page_rows(self, payload: dict[str, Any]) -> list[Any]:
+        """Строки кликов на одной странице GET /api/public/stats.
+
+        У Mobz часто ``result`` — пустой список, а события лежат в ``message``;
+        раньше из-за этого счётчик периода был всегда 0.
+        """
         result = payload.get("result")
+        message = payload.get("message")
+
+        msg_rows: list[Any] = []
+        if isinstance(message, list) and (not message or isinstance(message[0], dict)):
+            msg_rows = message
+
         if isinstance(result, list):
-            return len(result)
-        if isinstance(result, dict):
-            for key in ("total", "total_clicks", "clicks", "count", "all"):
-                val = result.get(key)
-                if isinstance(val, int):
-                    return val
-                if isinstance(val, str) and val.strip().isdigit():
-                    return int(val.strip())
-        msg = payload.get("message")
-        if isinstance(msg, list):
-            return len(msg)
-        return 0
+            if result:
+                return result
+            return msg_rows
+
+        return msg_rows
 
     async def stats_for_period(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
         deeplink_id = self.api.default_deeplink_id or next(iter(self._deeplink_index))
@@ -346,16 +350,12 @@ class HttpMobzClient(MobzClient):
             if stats_payload.get("status") == "error":
                 break
 
-            result = stats_payload.get("result")
-            if isinstance(result, list):
-                chunk = len(result)
-                total += chunk
-                if chunk < 100:
-                    break
-                page += 1
-                continue
-
-            return self._count_stats_payload(stats_payload)
+            rows = self._stats_page_rows(stats_payload)
+            chunk = len(rows)
+            total += chunk
+            if chunk < 100:
+                break
+            page += 1
 
         return total
 

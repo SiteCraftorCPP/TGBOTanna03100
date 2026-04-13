@@ -8,6 +8,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from admins_extra import load_extra_admin_ids
+
 
 @dataclass(slots=True)
 class FormatOption:
@@ -92,7 +94,7 @@ def _default_mobz_api() -> MobzApiSettings:
     return MobzApiSettings(
         origin="https://mobz.io",
         auth_header="Authorization",
-        editlink_token_field="urlnote",
+        editlink_token_field="erid",
         default_deeplink_id="main",
         marketplace_link_types={
             "wb": {"type": "wildberries", "url_field": "wildberries"},
@@ -143,6 +145,46 @@ def _parse_mobz_api(raw: dict) -> MobzApiSettings:
     )
 
 
+def deeplink_from_raw(deeplink: dict) -> DeeplinkConfig:
+    """Собирает DeeplinkConfig из одного объекта как в settings.json → deeplinks[]."""
+    if not isinstance(deeplink, dict):
+        raise ValueError("Диплинк должен быть JSON-объектом.")
+
+    m_raw = deeplink.get("marketplaces")
+    if not isinstance(m_raw, list) or not m_raw:
+        raise ValueError("Поле marketplaces должно быть непустым массивом.")
+
+    marketplaces: list[MarketplaceConfig] = []
+    for item in m_raw:
+        if not isinstance(item, dict):
+            raise ValueError("Каждый элемент marketplaces должен быть объектом.")
+        folders_raw = item.get("folders")
+        if folders_raw is None:
+            folders: list[str] = []
+        elif isinstance(folders_raw, list):
+            folders = [str(f) for f in folders_raw]
+        else:
+            raise ValueError("Поле folders должно быть массивом строк.")
+
+        marketplaces.append(
+            MarketplaceConfig(
+                id=str(item["id"]),
+                label=str(item["label"]),
+                suffix=str(item["suffix"]),
+                notification_label=str(item["notification_label"]),
+                folders=folders,
+            )
+        )
+
+    return DeeplinkConfig(
+        id=str(deeplink["id"]).strip(),
+        label=str(deeplink["label"]).strip(),
+        api_key_env=str(deeplink["api_key_env"]).strip(),
+        default_domain=str(deeplink["default_domain"]).strip(),
+        marketplaces=marketplaces,
+    )
+
+
 def _load_settings(project_dir: Path) -> tuple[list[FormatOption], list[DeeplinkConfig], MobzApiSettings]:
     settings_path = project_dir / "settings.json"
     raw = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -156,27 +198,7 @@ def _load_settings(project_dir: Path) -> tuple[list[FormatOption], list[Deeplink
         for item in raw["formats"]
     ]
 
-    deeplinks: list[DeeplinkConfig] = []
-    for deeplink in raw["deeplinks"]:
-        marketplaces = [
-            MarketplaceConfig(
-                id=item["id"],
-                label=item["label"],
-                suffix=item["suffix"],
-                notification_label=item["notification_label"],
-                folders=item["folders"],
-            )
-            for item in deeplink["marketplaces"]
-        ]
-        deeplinks.append(
-            DeeplinkConfig(
-                id=deeplink["id"],
-                label=deeplink["label"],
-                api_key_env=deeplink["api_key_env"],
-                default_domain=deeplink["default_domain"],
-                marketplaces=marketplaces,
-            )
-        )
+    deeplinks = [deeplink_from_raw(d) for d in raw["deeplinks"]]
 
     mobz_api = _parse_mobz_api(raw)
     return formats, deeplinks, mobz_api
@@ -192,8 +214,12 @@ def load_config() -> AppConfig:
 
     raw_admin_ids = os.getenv("TELEGRAM_ADMIN_IDS", "")
     admin_ids = _parse_admin_ids(raw_admin_ids)
-    if not admin_ids:
-        raise RuntimeError("Не задан TELEGRAM_ADMIN_IDS в .env")
+    extra_admin_ids = load_extra_admin_ids(project_dir)
+    if not admin_ids and not extra_admin_ids:
+        raise RuntimeError(
+            "Нужен хотя бы один администратор: укажите TELEGRAM_ADMIN_IDS в .env "
+            "(можно несколько id через запятую) и/или добавьте id в data/extra_admins.json."
+        )
 
     formats, deeplinks, mobz_api = _load_settings(project_dir)
     proxy_url = _normalize_proxy(os.getenv("TELEGRAM_PROXY"))

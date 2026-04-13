@@ -1,9 +1,9 @@
 {
-  "_mobz_api_note": "Официальный API: заголовок Authorization = API-ключ. Создание POST /api/public/addlink, правка POST /api/public/editlink, список GET /api/public/mylinks, одна ссылка GET /api/public/onelink, клики за период GET /api/public/stats (по каждой ссылке). Папки: GET /api/public/folders — имена в боте должны совпадать с названиями папок в Mobz.",
+  "_mobz_api_note": "Официальный API: заголовок Authorization = API-ключ. Создание POST /api/public/addlink, правка POST /api/public/editlink, список GET /api/public/mylinks, одна ссылка GET /api/public/onelink, клики за период GET /api/public/stats (по каждой ссылке). Папки: GET /api/public/folders — имена в боте должны совпадать с названиями папок в Mobz. ЕРИД при маркировке: editlink_token_field (по умолчанию erid); описание ссылки — urlnote только при addlink.",
   "mobz_api": {
     "origin": "https://mobz.io",
     "auth_header": "Authorization",
-    "editlink_token_field": "urlnote",
+    "editlink_token_field": "erid",
     "default_deeplink_id": "main",
     "stats_unique_only": true,
     "marketplace_link_types": {

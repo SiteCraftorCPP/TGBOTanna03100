@@ -1,0 +1,79 @@
+{
+  "_mobz_api_note": "Официальный API: заголовок Authorization = API-ключ. Создание POST /api/public/addlink, правка POST /api/public/editlink, список GET /api/public/mylinks, одна ссылка GET /api/public/onelink, клики за период GET /api/public/stats (по каждой ссылке). Папки: GET /api/public/folders — имена в боте должны совпадать с названиями папок в Mobz.",
+  "mobz_api": {
+    "origin": "https://mobz.io",
+    "auth_header": "Authorization",
+    "editlink_token_field": "urlnote",
+    "default_deeplink_id": "main",
+    "stats_unique_only": true,
+    "marketplace_link_types": {
+      "wb": { "type": "wildberries", "url_field": "wildberries" },
+      "ozon": { "type": "ozon", "url_field": "ozon" },
+      "golden_apple": { "type": "goldapple", "url_field": "goldapple" },
+      "letual": { "type": "letual", "url_field": "letual" }
+    }
+  },
+  "formats": [
+    {
+      "id": "max",
+      "label": "max",
+      "slug": "max"
+    },
+    {
+      "id": "vkStories",
+      "label": "vkStories",
+      "slug": "vkStories"
+    },
+    {
+      "id": "vkPost",
+      "label": "vkPost",
+      "slug": "vkPost"
+    },
+    {
+      "id": "none",
+      "label": "без формата",
+      "slug": ""
+    }
+  ],
+  "deeplinks": [
+    {
+      "id": "main",
+      "label": "Основной диплинк",
+      "api_key_env": "MOBZ_API_KEY_MAIN",
+      "default_domain": "sprey.mobz.link",
+      "marketplaces": [
+        {
+          "id": "wb",
+          "label": "Wildberries",
+          "suffix": "wb",
+          "notification_label": "WB",
+          "folders": [
+            "Без папки",
+            "tiktok ads"
+          ]
+        },
+        {
+          "id": "ozon",
+          "label": "OZON",
+          "suffix": "ozn",
+          "notification_label": "OZON",
+          "folders": []
+        },
+        {
+          "id": "golden_apple",
+          "label": "Золотое Яблоко",
+          "suffix": "ga",
+          "notification_label": "Золотое яблоко",
+          "folders": []
+        },
+        {
+          "id": "letual",
+          "label": "Лэтуаль",
+          "suffix": "let",
+          "notification_label": "Лэтуаль",
+          "folders": []
+        }
+      ]
+    }
+  ]
+}

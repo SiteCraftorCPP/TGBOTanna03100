@@ -1,0 +1,15 @@
+[Unit]
+Description=Telegram bot TGBOTanna03100
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/tgbotanna03100
+EnvironmentFile=/opt/tgbotanna03100/.env
+ExecStart=/opt/tgbotanna03100/.venv/bin/python /opt/tgbotanna03100/main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

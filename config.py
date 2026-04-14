@@ -77,7 +77,7 @@ def _default_mobz_api() -> MobzApiSettings:
     return MobzApiSettings(
         origin="https://mobz.io",
         auth_header="Authorization",
-        editlink_token_field="erid",
+        editlink_token_field="detail_erid",
         default_deeplink_id="main",
         marketplace_link_types={
             "wb": {"type": "wildberries", "url_field": "wildberries"},

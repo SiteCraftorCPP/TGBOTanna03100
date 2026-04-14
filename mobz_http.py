@@ -5,7 +5,7 @@ import json
 import os
 from datetime import date, datetime, time, timezone
 from typing import Any, Iterator
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -36,6 +36,14 @@ def _normalize_url(url: str) -> str:
     if u.startswith("http://") or u.startswith("https://"):
         return u
     return f"https://{u}"
+
+
+def _url_with_query_value(url: str, key: str, value: str) -> str:
+    parsed = urlsplit(_normalize_url(url))
+    items = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k != key]
+    items.append((key, value))
+    query = urlencode(items, doseq=True)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment))
 
 
 class HttpMobzClient(MobzClient):
@@ -228,14 +236,24 @@ class HttpMobzClient(MobzClient):
     async def attach_marking_token(self, link_record: dict[str, Any], token: str) -> dict[str, Any]:
         deeplink_id = str(link_record["deeplink_id"])
         shortcode = str(link_record["short_code"])
-        field = self.api.editlink_token_field.strip() or "erid"
+        field = self.api.editlink_token_field.strip() or "detail_erid"
 
         data: dict[str, Any] = {"shortcode": shortcode, field: token}
         source = str(link_record.get("source_url") or "").strip()
         if source:
             data["some_url"] = source
-        await self._post_form(deeplink_id, "/api/public/editlink", data)
-        return {"token_status": "applied"}
+        payload = await self._post_form(deeplink_id, "/api/public/editlink", data)
+
+        raw_url = str(payload.get("message") or "").strip()
+        if raw_url.startswith("http"):
+            base_url = _normalize_url(raw_url)
+        else:
+            base_url = str(link_record.get("short_url") or "").strip()
+        short_url = _url_with_query_value(base_url, field, token) if base_url else base_url
+        updates: dict[str, Any] = {"token_status": "applied"}
+        if short_url:
+            updates["short_url"] = short_url
+        return updates
 
     def _period_timestamps(self, start_date: date, end_date: date) -> tuple[int, int]:
         tz = timezone.utc

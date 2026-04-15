@@ -256,21 +256,6 @@ def deeplink_keyboard():
     return builder.as_markup()
 
 
-def marketplace_keyboard_filtered(deeplink: DeeplinkConfig, *, exclude_ids: set[str] | None = None):
-    exclude_ids = exclude_ids or set()
-    builder = InlineKeyboardBuilder()
-    for item in deeplink.marketplaces:
-        if item.id in exclude_ids:
-            continue
-        builder.row(
-            InlineKeyboardButton(
-                text=item.label,
-                callback_data=f"marketplace:{item.id}",
-            )
-        )
-    return builder.as_markup()
-
-
 def after_create_keyboard(link_id: str):
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="➕ Ещё ссылка", callback_data=f"create:more:{link_id}"))
@@ -335,17 +320,14 @@ async def prompt_marketplaces_for_more(
     target: Message | CallbackQuery,
     deeplink_id: str,
     state: FSMContext,
-    *,
-    exclude_marketplace_ids: set[str],
 ) -> None:
     await state.update_data(deeplink_id=deeplink_id)
     deeplink = deeplink_by_id(deeplink_id)
     text = f"Ещё ссылка для <b>{deeplink.label}</b>. Выберите площадку."
-    markup = marketplace_keyboard_filtered(deeplink, exclude_ids=exclude_marketplace_ids)
     if isinstance(target, Message):
-        await target.answer(text, reply_markup=markup)
+        await target.answer(text, reply_markup=marketplace_keyboard(deeplink))
     else:
-        await target.message.answer(text, reply_markup=markup)
+        await target.message.answer(text, reply_markup=marketplace_keyboard(deeplink))
 
 
 async def _create_link_with_format(
@@ -435,11 +417,25 @@ async def _create_link_with_format(
         }
     )
 
-    # Сохраняем контекст последнего создания (для кнопки "Ещё ссылка")
-    await state.clear()
-    label = record.get("marketplace_notification_label") or record.get("marketplace_label") or "Ссылка"
+    # Сохраняем контекст в рамках сессии: блогер/дата/формат и список созданных ссылок.
+    label = record.get("marketplace_notification_label") or record.get("marketplace_label") or "LINK"
     url = record["short_url"]
-    msg_text = f"{label}: {url}"
+
+    session_links = list(data.get("session_links") or [])
+    session_links.append({"label": str(label), "url": str(url)})
+    summary = "\n".join(f"{x['label']}: {x['url']}" for x in session_links if x.get("label") and x.get("url"))
+
+    await state.clear()
+    await state.update_data(
+        blogger_raw=record.get("blogger_raw"),
+        blogger_slug=record.get("blogger_slug"),
+        date_value=record.get("date_value"),
+        format_id=record.get("format_id"),
+        quick_more=True,
+        session_links=session_links,
+    )
+
+    msg_text = summary or f"{label}: {url}"
     if isinstance(target, CallbackQuery) and target.message:
         await target.message.answer(msg_text)
         await target.message.answer("Дальше:", reply_markup=after_create_keyboard(record["id"]))
@@ -705,11 +701,10 @@ async def create_more_callback(callback: CallbackQuery, state: FSMContext) -> No
         date_value=record.get("date_value"),
         format_id=record.get("format_id"),
         quick_more=True,
+        session_links=[{"label": (record.get("marketplace_notification_label") or record.get("marketplace_label") or "LINK"), "url": record.get("short_url")}],
     )
-    # Исключаем уже использованную площадку, чтобы удобнее выбрать вторую.
     deeplink_id = str(record.get("deeplink_id") or "main")
-    exclude = {str(record.get("marketplace_id") or "")} if record.get("marketplace_id") else set()
-    await prompt_marketplaces_for_more(callback, deeplink_id, state, exclude_marketplace_ids=exclude)
+    await prompt_marketplaces_for_more(callback, deeplink_id, state)
 
 
 @router.callback_query(F.data == "links:list")

@@ -256,6 +256,28 @@ def deeplink_keyboard():
     return builder.as_markup()
 
 
+def marketplace_keyboard_filtered(deeplink: DeeplinkConfig, *, exclude_ids: set[str] | None = None):
+    exclude_ids = exclude_ids or set()
+    builder = InlineKeyboardBuilder()
+    for item in deeplink.marketplaces:
+        if item.id in exclude_ids:
+            continue
+        builder.row(
+            InlineKeyboardButton(
+                text=item.label,
+                callback_data=f"marketplace:{item.id}",
+            )
+        )
+    return builder.as_markup()
+
+
+def after_create_keyboard(link_id: str):
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="➕ Ещё ссылка", callback_data=f"create:more:{link_id}"))
+    builder.row(InlineKeyboardButton(text="✅ Завершить", callback_data="create:finish"))
+    return builder.as_markup()
+
+
 def marketplace_keyboard(deeplink: DeeplinkConfig):
     builder = InlineKeyboardBuilder()
     for item in deeplink.marketplaces:
@@ -307,6 +329,124 @@ async def prompt_marketplaces(target: Message | CallbackQuery, deeplink_id: str,
         await target.answer(text, reply_markup=marketplace_keyboard(deeplink))
     else:
         await target.message.answer(text, reply_markup=marketplace_keyboard(deeplink))
+
+
+async def prompt_marketplaces_for_more(
+    target: Message | CallbackQuery,
+    deeplink_id: str,
+    state: FSMContext,
+    *,
+    exclude_marketplace_ids: set[str],
+) -> None:
+    await state.update_data(deeplink_id=deeplink_id)
+    deeplink = deeplink_by_id(deeplink_id)
+    text = f"Ещё ссылка для <b>{deeplink.label}</b>. Выберите площадку."
+    markup = marketplace_keyboard_filtered(deeplink, exclude_ids=exclude_marketplace_ids)
+    if isinstance(target, Message):
+        await target.answer(text, reply_markup=markup)
+    else:
+        await target.message.answer(text, reply_markup=markup)
+
+
+async def _create_link_with_format(
+    target: Message | CallbackQuery,
+    state: FSMContext,
+    *,
+    format_option: FormatOption,
+) -> None:
+    data = await state.get_data()
+    required = (
+        "deeplink_id",
+        "marketplace_id",
+        "folder_name",
+        "source_url",
+        "blogger_raw",
+        "blogger_slug",
+        "date_value",
+    )
+    if not all(data.get(k) for k in required):
+        if isinstance(target, CallbackQuery):
+            await target.answer("Сессия устарела. Начните с «Создать ссылку».", show_alert=True)
+        else:
+            await target.answer("Сессия устарела. Нажмите «Создать ссылку».", reply_markup=main_menu())
+        return
+
+    try:
+        deeplink = deeplink_by_id(str(data["deeplink_id"]))
+        marketplace = marketplace_by_id(deeplink, str(data["marketplace_id"]))
+    except KeyError:
+        if isinstance(target, CallbackQuery) and target.message:
+            await target.message.answer("Диплинк или площадка не найдены. Начните создание ссылки заново.")
+        elif isinstance(target, Message):
+            await target.answer("Диплинк или площадка не найдены. Начните создание ссылки заново.")
+        await state.clear()
+        return
+
+    short_code = build_short_code(
+        blogger_slug=str(data["blogger_slug"]),
+        date_value=str(data["date_value"]),
+        format_slug=format_option.slug,
+        marketplace_suffix=marketplace.suffix,
+    )
+
+    request = CreateLinkRequest(
+        deeplink_id=deeplink.id,
+        deeplink_label=deeplink.label,
+        marketplace_id=marketplace.id,
+        marketplace_label=marketplace.label,
+        folder_name=str(data["folder_name"]),
+        source_url=str(data["source_url"]),
+        short_code=short_code,
+        domain=deeplink.default_domain,
+        link_note=(
+            f"{data['blogger_slug']} {data['date_value']} {format_option.slug} {marketplace.suffix}"
+        ).strip(),
+    )
+
+    try:
+        result = await MOBZ.create_short_link(request)
+    except RuntimeError as exc:
+        text = f"Не удалось создать ссылку в Mobz: {exc}"
+        if isinstance(target, CallbackQuery) and target.message:
+            await target.message.answer(text)
+        elif isinstance(target, Message):
+            await target.answer(text)
+        return
+
+    record = STORE.create_link(
+        {
+            "deeplink_id": deeplink.id,
+            "deeplink_label": deeplink.label,
+            "marketplace_id": marketplace.id,
+            "marketplace_label": marketplace.label,
+            "marketplace_notification_label": marketplace.notification_label,
+            "folder_name": data["folder_name"],
+            "source_url": data["source_url"],
+            "blogger_raw": data["blogger_raw"],
+            "blogger_slug": data["blogger_slug"],
+            "date_value": data["date_value"],
+            "format_id": format_option.id,
+            "format_label": format_option.label,
+            "format_slug": format_option.slug,
+            "short_code": short_code,
+            "short_url": result.short_url,
+            "external_id": result.external_id,
+            "token_status": "pending",
+        }
+    )
+
+    # Сохраняем контекст последнего создания (для кнопки "Ещё ссылка")
+    await state.clear()
+    label = record.get("marketplace_notification_label") or record.get("marketplace_label") or "Ссылка"
+    url = record["short_url"]
+    msg_text = f"{label}: {url}"
+    if isinstance(target, CallbackQuery) and target.message:
+        await target.message.answer(msg_text)
+        await target.message.answer("Дальше:", reply_markup=after_create_keyboard(record["id"]))
+    elif isinstance(target, Message):
+        await target.answer(msg_text)
+        await target.answer("Дальше:", reply_markup=after_create_keyboard(record["id"]))
+
 
 
 async def begin_create_flow(message: Message, state: FSMContext) -> None:
@@ -465,6 +605,18 @@ async def target_url_received(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(source_url=raw_url)
+    data = await state.get_data()
+    # Быстрый режим "Ещё ссылка": блогер/дата/формат уже известны, остаётся только URL.
+    if data.get("quick_more") and data.get("format_id"):
+        try:
+            fmt = format_by_id(str(data["format_id"]))
+        except KeyError:
+            await state.clear()
+            await message.answer("Не найден формат. Начните с «Создать ссылку».", reply_markup=main_menu())
+            return
+        await _create_link_with_format(message, state, format_option=fmt)
+        return
+
     await state.set_state(CreateLinkStates.entering_blogger)
     await message.answer(
         "Отправьте ник блогера. Бот автоматически удалит пробелы, подчёркивания и пунктуацию."
@@ -516,88 +668,48 @@ async def format_selected(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Неизвестный формат.", show_alert=True)
         return
 
-    data = await state.get_data()
-    required = (
-        "deeplink_id",
-        "marketplace_id",
-        "folder_name",
-        "source_url",
-        "blogger_raw",
-        "blogger_slug",
-        "date_value",
-    )
-    if not all(data.get(k) for k in required):
-        await callback.answer("Сессия устарела. Начните с «Создать ссылку».", show_alert=True)
-        return
-
     await callback.answer()
+    await _create_link_with_format(callback, state, format_option=format_option)
 
-    try:
-        deeplink = deeplink_by_id(str(data["deeplink_id"]))
-        marketplace = marketplace_by_id(deeplink, str(data["marketplace_id"]))
-    except KeyError:
-        if callback.message:
-            await callback.message.answer("Диплинк или площадка не найдены. Начните создание ссылки заново.")
-        await state.clear()
+
+@router.callback_query(F.data == "create:finish")
+async def create_finish_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not can_use_bot(callback.from_user.id if callback.from_user else None):
+        await deny_access(callback)
         return
-
-    short_code = build_short_code(
-        blogger_slug=str(data["blogger_slug"]),
-        date_value=str(data["date_value"]),
-        format_slug=format_option.slug,
-        marketplace_suffix=marketplace.suffix,
-    )
-
-    request = CreateLinkRequest(
-        deeplink_id=deeplink.id,
-        deeplink_label=deeplink.label,
-        marketplace_id=marketplace.id,
-        marketplace_label=marketplace.label,
-        folder_name=str(data["folder_name"]),
-        source_url=str(data["source_url"]),
-        short_code=short_code,
-        domain=deeplink.default_domain,
-        link_note=(
-            f"{data['blogger_slug']} {data['date_value']} {format_option.slug} {marketplace.suffix}"
-        ).strip(),
-    )
-
-    try:
-        result = await MOBZ.create_short_link(request)
-    except RuntimeError as exc:
-        if callback.message:
-            await callback.message.answer(f"Не удалось создать ссылку в Mobz: {exc}")
-        return
-
-    record = STORE.create_link(
-        {
-            "deeplink_id": deeplink.id,
-            "deeplink_label": deeplink.label,
-            "marketplace_id": marketplace.id,
-            "marketplace_label": marketplace.label,
-            "marketplace_notification_label": marketplace.notification_label,
-            "folder_name": data["folder_name"],
-            "source_url": data["source_url"],
-            "blogger_raw": data["blogger_raw"],
-            "blogger_slug": data["blogger_slug"],
-            "date_value": data["date_value"],
-            "format_id": format_option.id,
-            "format_label": format_option.label,
-            "format_slug": format_option.slug,
-            "short_code": short_code,
-            "short_url": result.short_url,
-            "external_id": result.external_id,
-            "token_status": "pending",
-        }
-    )
-
+    await callback.answer()
     await state.clear()
     if callback.message:
-        await callback.message.answer(
-            f"Короткая ссылка готова - {record['short_url']}\n\n"
-            f"Код: <b>{record['short_code']}</b>",
-            reply_markup=link_actions_keyboard(record["id"]),
-        )
+        await callback.message.answer("Готово.", reply_markup=main_menu())
+
+
+@router.callback_query(F.data.startswith("create:more:"))
+async def create_more_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not can_use_bot(callback.from_user.id if callback.from_user else None):
+        await deny_access(callback)
+        return
+
+    link_id = callback.data.split(":", maxsplit=2)[2]
+    record = STORE.get_link(link_id)
+    await callback.answer()
+    if not record:
+        if callback.message:
+            await callback.message.answer("Ссылка не найдена. Начните с «Создать ссылку».", reply_markup=main_menu())
+        return
+
+    # Контекст (блогер/дата/формат) берём из первой ссылки, чтобы не спрашивать снова.
+    await state.clear()
+    await state.update_data(
+        blogger_raw=record.get("blogger_raw"),
+        blogger_slug=record.get("blogger_slug"),
+        date_value=record.get("date_value"),
+        format_id=record.get("format_id"),
+        quick_more=True,
+    )
+    # Исключаем уже использованную площадку, чтобы удобнее выбрать вторую.
+    deeplink_id = str(record.get("deeplink_id") or "main")
+    exclude = {str(record.get("marketplace_id") or "")} if record.get("marketplace_id") else set()
+    await prompt_marketplaces_for_more(callback, deeplink_id, state, exclude_marketplace_ids=exclude)
 
 
 @router.callback_query(F.data == "links:list")

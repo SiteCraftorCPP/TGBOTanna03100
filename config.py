@@ -47,6 +47,7 @@ class MobzApiSettings:
 class AppConfig:
     project_dir: Path
     token: str
+    admin_ids: set[int]
     proxy_url: str | None
     mobz_provider: str
     formats: list[FormatOption]
@@ -87,6 +88,19 @@ def _default_mobz_api() -> MobzApiSettings:
         },
         stats_unique_only=True,
     )
+
+
+def _parse_admin_ids(raw_value: str) -> set[int]:
+    chunks = [item.strip() for item in raw_value.replace(";", ",").replace(" ", ",").split(",") if item.strip()]
+    admin_ids: set[int] = set()
+    for item in chunks:
+        try:
+            admin_ids.add(int(item))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Некорректный TELEGRAM_ADMIN_IDS: {item!r}. Используйте только числовые Telegram ID."
+            ) from exc
+    return admin_ids
 
 
 def _parse_mobz_api(raw: dict) -> MobzApiSettings:
@@ -195,12 +209,14 @@ def load_config() -> AppConfig:
     if not token:
         raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN в .env")
 
+    admin_ids = _parse_admin_ids(os.getenv("TELEGRAM_ADMIN_IDS", ""))
     formats, deeplinks, mobz_api = _load_settings(project_dir)
     proxy_url = _normalize_proxy(os.getenv("TELEGRAM_PROXY"))
 
     return AppConfig(
         project_dir=project_dir,
         token=token,
+        admin_ids=admin_ids,
         proxy_url=proxy_url,
         mobz_provider=os.getenv("MOBZ_PROVIDER", "mock").strip().lower() or "mock",
         formats=formats,

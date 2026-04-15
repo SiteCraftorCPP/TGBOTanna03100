@@ -50,6 +50,27 @@ def can_use_bot(user_id: int | None) -> bool:
     return user_id is not None
 
 
+def is_admin(user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    return user_id in CONFIG.admin_ids
+
+
+def can_access_record(user_id: int | None, record: dict[str, Any] | None) -> bool:
+    if record is None or user_id is None:
+        return False
+    if is_admin(user_id):
+        return True
+    owner_id = record.get("owner_id")
+    if owner_id is None:
+        # Старые записи без владельца: показываем только админам.
+        return False
+    try:
+        return int(owner_id) == int(user_id)
+    except Exception:
+        return False
+
+
 async def deny_access(target: Message | CallbackQuery) -> None:
     text = "Откройте бот из личного чата."
     if isinstance(target, Message):
@@ -397,6 +418,7 @@ async def _create_link_with_format(
 
     record = STORE.create_link(
         {
+            "owner_id": (target.from_user.id if getattr(target, "from_user", None) else None),
             "deeplink_id": deeplink.id,
             "deeplink_label": deeplink.label,
             "marketplace_id": marketplace.id,
@@ -417,13 +439,9 @@ async def _create_link_with_format(
         }
     )
 
-    # Сохраняем контекст в рамках сессии: блогер/дата/формат и список созданных ссылок.
+    # Сохраняем контекст в рамках сессии: блогер/дата/формат для "Ещё ссылка".
     label = record.get("marketplace_notification_label") or record.get("marketplace_label") or "LINK"
     url = record["short_url"]
-
-    session_links = list(data.get("session_links") or [])
-    session_links.append({"label": str(label), "url": str(url)})
-    summary = "\n".join(f"{x['label']}: {x['url']}" for x in session_links if x.get("label") and x.get("url"))
 
     await state.clear()
     await state.update_data(
@@ -432,10 +450,9 @@ async def _create_link_with_format(
         date_value=record.get("date_value"),
         format_id=record.get("format_id"),
         quick_more=True,
-        session_links=session_links,
     )
 
-    msg_text = summary or f"{label}: {url}"
+    msg_text = f"{label}: {url}"
     if isinstance(target, CallbackQuery) and target.message:
         await target.message.answer(msg_text)
         await target.message.answer("Дальше:", reply_markup=after_create_keyboard(record["id"]))
@@ -456,7 +473,13 @@ async def begin_create_flow(message: Message, state: FSMContext) -> None:
 
 
 async def show_links(message: Message | CallbackQuery) -> None:
-    records = STORE.list_links(limit=20)
+    uid = message.from_user.id if getattr(message, "from_user", None) else None
+    if uid is None:
+        records: list[dict[str, Any]] = []
+    elif is_admin(uid):
+        records = STORE.list_links(limit=20)
+    else:
+        records = STORE.list_links_for_owner(uid, limit=20)
     if not records:
         text = "Ссылок пока нет. Сначала создайте первую через кнопку «Создать ссылку»."
         if isinstance(message, Message):
@@ -688,7 +711,8 @@ async def create_more_callback(callback: CallbackQuery, state: FSMContext) -> No
     link_id = callback.data.split(":", maxsplit=2)[2]
     record = STORE.get_link(link_id)
     await callback.answer()
-    if not record:
+    uid = callback.from_user.id if callback.from_user else None
+    if not can_access_record(uid, record):
         if callback.message:
             await callback.message.answer("Ссылка не найдена. Начните с «Создать ссылку».", reply_markup=main_menu())
         return
@@ -701,7 +725,6 @@ async def create_more_callback(callback: CallbackQuery, state: FSMContext) -> No
         date_value=record.get("date_value"),
         format_id=record.get("format_id"),
         quick_more=True,
-        session_links=[{"label": (record.get("marketplace_notification_label") or record.get("marketplace_label") or "LINK"), "url": record.get("short_url")}],
     )
     deeplink_id = str(record.get("deeplink_id") or "main")
     await prompt_marketplaces_for_more(callback, deeplink_id, state)
@@ -726,7 +749,8 @@ async def link_card_callback(callback: CallbackQuery) -> None:
     link_id = callback.data.split(":", maxsplit=1)[1]
     record = STORE.get_link(link_id)
     await callback.answer()
-    if not record:
+    uid = callback.from_user.id if callback.from_user else None
+    if not can_access_record(uid, record):
         await callback.message.answer("Ссылка не найдена.")
         return
 
@@ -745,7 +769,8 @@ async def token_start_callback(callback: CallbackQuery, state: FSMContext) -> No
     link_id = callback.data.split(":", maxsplit=1)[1]
     record = STORE.get_link(link_id)
     await callback.answer()
-    if not record:
+    uid = callback.from_user.id if callback.from_user else None
+    if not can_access_record(uid, record):
         await callback.message.answer("Ссылка не найдена.")
         return
 
@@ -769,7 +794,8 @@ async def token_received(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
     record = STORE.get_link(data["link_id"])
-    if not record:
+    uid = message.from_user.id if message.from_user else None
+    if not can_access_record(uid, record):
         await state.clear()
         await message.answer("Ссылка не найдена. Попробуйте открыть её заново из списка.")
         return
@@ -884,7 +910,8 @@ async def stats_link_callback(callback: CallbackQuery) -> None:
     link_id = callback.data.split(":", maxsplit=1)[1]
     record = STORE.get_link(link_id)
     await callback.answer()
-    if not record:
+    uid = callback.from_user.id if callback.from_user else None
+    if not can_access_record(uid, record):
         await callback.message.answer("Ссылка не найдена.")
         return
 

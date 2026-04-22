@@ -55,6 +55,19 @@ def is_admin(user_id: int | None) -> bool:
     return user_id in CONFIG.admin_ids
 
 
+def session_line_for_record(record: dict[str, Any]) -> str:
+    label = str(
+        record.get("marketplace_notification_label")
+        or record.get("marketplace_label")
+        or "LINK"
+    )
+    if str(record.get("marketplace_id") or "") == "wb":
+        u = str(record.get("source_url") or record.get("short_url") or "").strip()
+    else:
+        u = str(record.get("short_url") or "").strip()
+    return f"{label}: {u}"
+
+
 def can_access_record(user_id: int | None, record: dict[str, Any] | None) -> bool:
     if record is None or user_id is None:
         return False
@@ -437,9 +450,12 @@ async def _create_link_with_format(
         }
     )
 
-    # сессия «ещё ссылка»: ник+дата+формат
-    label = record.get("marketplace_notification_label") or record.get("marketplace_label") or "LINK"
-    url = record["short_url"]
+    # сессия «ещё ссылка»
+    line = session_line_for_record(record)
+    prev_raw = data.get("create_session_batch")
+    if not isinstance(prev_raw, list):
+        prev_raw = []
+    new_batch: list[str] = list(prev_raw) + [line]
 
     await state.clear()
     await state.update_data(
@@ -448,9 +464,10 @@ async def _create_link_with_format(
         date_value=record.get("date_value"),
         format_id=record.get("format_id"),
         quick_more=True,
+        create_session_batch=new_batch,
     )
 
-    msg_text = f"{label}: {url}"
+    msg_text = line
     if isinstance(target, CallbackQuery) and target.message:
         await target.message.answer(msg_text)
         await target.message.answer("Дальше:", reply_markup=after_create_keyboard(record["id"]))
@@ -695,9 +712,16 @@ async def create_finish_callback(callback: CallbackQuery, state: FSMContext) -> 
         await deny_access(callback)
         return
     await callback.answer()
+    data = await state.get_data()
+    batch = data.get("create_session_batch")
+    if not isinstance(batch, list) or not batch:
+        batch = None
     await state.clear()
     if callback.message:
-        await callback.message.answer("Готово.", reply_markup=main_menu())
+        if batch:
+            await callback.message.answer("\n".join(str(x) for x in batch), reply_markup=main_menu())
+        else:
+            await callback.message.answer("Готово.", reply_markup=main_menu())
 
 
 @router.callback_query(F.data.startswith("create:more:"))
@@ -715,7 +739,11 @@ async def create_more_callback(callback: CallbackQuery, state: FSMContext) -> No
             await callback.message.answer("Ссылка не найдена. Начните с «Создать ссылку».", reply_markup=main_menu())
         return
 
-    # подтянуть ник/дату/формат с первой ссылки
+    data_before = await state.get_data()
+    prev_batch = data_before.get("create_session_batch")
+    if not isinstance(prev_batch, list) or not prev_batch:
+        prev_batch = [session_line_for_record(record)]
+
     await state.clear()
     await state.update_data(
         blogger_raw=record.get("blogger_raw"),
@@ -723,6 +751,7 @@ async def create_more_callback(callback: CallbackQuery, state: FSMContext) -> No
         date_value=record.get("date_value"),
         format_id=record.get("format_id"),
         quick_more=True,
+        create_session_batch=prev_batch,
     )
     deeplink_id = str(record.get("deeplink_id") or "main")
     await prompt_marketplaces_for_more(callback, deeplink_id, state)

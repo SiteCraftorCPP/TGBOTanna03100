@@ -1,9 +1,4 @@
-r"""
-Полная проверка Mobz Public API (Authorization + эндпоинты, используемые ботом).
-Запуск из корня проекта:
-
-  .venv\Scripts\python scripts\verify_mobz_api.py
-"""
+# smoke: mobz public api. из корня: python scripts/verify_mobz_api.py
 
 from __future__ import annotations
 
@@ -54,7 +49,7 @@ def _first_link_id_from_mylinks(payload: dict) -> tuple[str, str] | None:
 
 
 async def main() -> int:
-    print("verify_mobz_api: старт проверки Mobz Public API…", flush=True)
+    print("mobz api check…", flush=True)
     config = load_config()
     if config.mobz_provider != "http":
         print("В .env задайте MOBZ_PROVIDER=http для проверки реального API.")
@@ -64,7 +59,7 @@ async def main() -> int:
     deeplink_id = "main"
     errors = 0
 
-    # 1) Folders
+    # folders
     try:
         r = await client._get_json(deeplink_id, "/api/public/folders")
         assert r.get("status") == "success"
@@ -73,7 +68,7 @@ async def main() -> int:
         fail("GET /api/public/folders", e)
         errors += 1
 
-    # 2) My links (повтор при 504 / таймауте)
+    # mylinks, ретраи если 504
     first = None
     last_err: BaseException | None = None
     for attempt in range(1, 4):
@@ -101,7 +96,7 @@ async def main() -> int:
         fail("GET /api/public/mylinks", last_err)
         errors += 1
 
-    # 3) One link + stats (если есть существующая ссылка)
+    # onelink + stats по одной из mylinks
     if first:
         link_id, _link_label = first
         try:
@@ -144,7 +139,7 @@ async def main() -> int:
             fail("GET /api/public/stats", e)
             errors += 1
 
-    # 4) addlink (ozon + поле ozon, уникальный шорткод)
+    # addlink (ozon)
     short_code = f"tgc{int(time.time())}"
     created_id: str | None = None
     try:
@@ -157,7 +152,7 @@ async def main() -> int:
             source_url="https://www.ozon.ru/product/",
             short_code=short_code,
             domain="sprey.mobz.link",
-            link_note="cursor_api_verify",
+            link_note="api_smoke",
         )
         out = await client.create_short_link(req)
         created_id = out.external_id
@@ -166,7 +161,7 @@ async def main() -> int:
         fail("POST /api/public/addlink", e)
         errors += 1
 
-    # 5) HttpMobzClient.stats_for_link по созданной записи
+    # onelink stats по тестовой
     if created_id:
         record = {
             "deeplink_id": deeplink_id,
@@ -188,7 +183,7 @@ async def main() -> int:
             fail("POST /api/public/editlink", e)
             errors += 1
 
-    # 6) stats за период: выборка первых 5 ссылок (полный обход аккаунта может занять минуты)
+    # stats пачка (5 link_id) за пару дней
     def _iter_links(raw: list) -> list[dict]:
         out: list[dict] = []
         for item in raw:
@@ -232,7 +227,7 @@ async def main() -> int:
         fail("stats период (выборка)", e)
         errors += 1
 
-    # 7) stats_for_period — тот же вызов, что в боте (main._answer_stats_period)
+    # stats_for_period целиком (долго на жирных аккаунтах)
     try:
         d0 = date.today() - timedelta(days=7)
         d1 = date.today()

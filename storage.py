@@ -65,7 +65,7 @@ class JsonStorage:
         return links[:limit]
 
     def list_all_links(self) -> list[dict[str, Any]]:
-        """Все карточки (для статистики за период по ссылкам бота, без обхода всего аккаунта Mobz)."""
+        """все карточки — для stat по периоду"""
         data = self._read()
         return sorted(
             data["links"],

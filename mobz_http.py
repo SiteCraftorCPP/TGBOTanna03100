@@ -262,11 +262,7 @@ class HttpMobzClient(MobzClient):
         return int(start_dt.timestamp()), int(end_dt.timestamp())
 
     def _stats_page_rows(self, payload: dict[str, Any]) -> list[Any]:
-        """Строки кликов на одной странице GET /api/public/stats.
-
-        У Mobz часто ``result`` — пустой список, а события лежат в ``message``;
-        раньше из-за этого счётчик периода был всегда 0.
-        """
+        # у stats иногда event-ы в message, result пустой
         result = payload.get("result")
         message = payload.get("message")
 
@@ -288,11 +284,7 @@ class HttpMobzClient(MobzClient):
         *,
         link_records: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Клики за период по GET /api/public/stats для каждой ссылки (одного запроса «на весь аккаунт» у Mobz нет).
-
-        Если передан ``link_records`` (карточки из бота с ``external_id``), обходим только их — быстро.
-        Иначе тянем полный ``mylinks`` и считаем по всем ссылкам аккаунта (может быть долго).
-        """
+        # за период: отдельный stats на link_id. link_records — только бот, иначе mylinks целиком
         default_dl = self.api.default_deeplink_id or next(iter(self._deeplink_index))
         ts_from, ts_to = self._period_timestamps(start_date, end_date)
 

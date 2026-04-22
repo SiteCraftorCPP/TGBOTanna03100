@@ -46,7 +46,6 @@ MOBZ: MobzClient
 
 
 def can_use_bot(user_id: int | None) -> bool:
-    """Бот доступен любому пользователю Telegram (с известным id)."""
     return user_id is not None
 
 
@@ -63,7 +62,6 @@ def can_access_record(user_id: int | None, record: dict[str, Any] | None) -> boo
         return True
     owner_id = record.get("owner_id")
     if owner_id is None:
-        # Старые записи без владельца: показываем только админам.
         return False
     try:
         return int(owner_id) == int(user_id)
@@ -169,7 +167,7 @@ def parse_day_month(value: str) -> str | None:
 
 
 def _parse_date_dmY(part: str) -> date | None:
-    """ДД.ММ.ГГГГ с допуском ведущих нулей (например 013.04.2026 → 13.04.2026)."""
+    """парс ДД.ММ.ГГГГ, лидирующий ноль в дне тоже ок"""
     chunks = [c.strip() for c in part.strip().split(".") if c.strip()]
     if len(chunks) != 3:
         return None
@@ -186,7 +184,7 @@ def _parse_date_dmY(part: str) -> date | None:
 
 
 def parse_period(value: str) -> tuple[date, date] | None:
-    """Две даты Д.М.ГГГГ; между ними — дефис, длинное тире, пробелы и т.п."""
+    """период из двух дат, разделитель всякий"""
     cleaned = (value or "").strip().replace(" ", "")
     m = re.search(
         r"(\d{1,3}\.\d{1,2}\.\d{4})\s*[^\d.]+\s*(\d{1,3}\.\d{1,2}\.\d{4})",
@@ -439,7 +437,7 @@ async def _create_link_with_format(
         }
     )
 
-    # Сохраняем контекст в рамках сессии: блогер/дата/формат для "Ещё ссылка".
+    # сессия «ещё ссылка»: ник+дата+формат
     label = record.get("marketplace_notification_label") or record.get("marketplace_label") or "LINK"
     url = record["short_url"]
 
@@ -625,7 +623,7 @@ async def target_url_received(message: Message, state: FSMContext) -> None:
 
     await state.update_data(source_url=raw_url)
     data = await state.get_data()
-    # Быстрый режим "Ещё ссылка": блогер/дата/формат уже известны, остаётся только URL.
+    # вторая+ ссылка: только url
     if data.get("quick_more") and data.get("format_id"):
         try:
             fmt = format_by_id(str(data["format_id"]))
@@ -717,7 +715,7 @@ async def create_more_callback(callback: CallbackQuery, state: FSMContext) -> No
             await callback.message.answer("Ссылка не найдена. Начните с «Создать ссылку».", reply_markup=main_menu())
         return
 
-    # Контекст (блогер/дата/формат) берём из первой ссылки, чтобы не спрашивать снова.
+    # подтянуть ник/дату/формат с первой ссылки
     await state.clear()
     await state.update_data(
         blogger_raw=record.get("blogger_raw"),

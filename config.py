@@ -143,7 +143,7 @@ def _parse_mobz_api(raw: dict) -> MobzApiSettings:
 
 
 def deeplink_from_raw(deeplink: dict) -> DeeplinkConfig:
-    """Собирает DeeplinkConfig из одного объекта как в settings.json → deeplinks[]."""
+    """как в settings.json, блок deeplinks[]"""
     if not isinstance(deeplink, dict):
         raise ValueError("Диплинк должен быть JSON-объектом.")
 

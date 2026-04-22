@@ -1,4 +1,4 @@
-"""Юнит-тесты разбора статистики Mobz и периода (без реального API и без .env)."""
+# stats parsing + parse_period, без .env
 
 from __future__ import annotations
 

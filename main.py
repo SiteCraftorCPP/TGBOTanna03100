@@ -276,6 +276,16 @@ def link_actions_keyboard(link_id: str):
     return builder.as_markup()
 
 
+def create_post_link_keyboard(link_id: str) -> Any:
+    """Сразу после создания: ERID, как в «Мои ссылки», плюс шаг к «ещё ссылка»."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="Вшить ЕРИД", callback_data=f"token:{link_id}"))
+    builder.row(InlineKeyboardButton(text="Стата по ссылке", callback_data=f"stats_link:{link_id}"))
+    builder.row(InlineKeyboardButton(text="К списку ссылок", callback_data="links:list"))
+    builder.row(InlineKeyboardButton(text="➡ Далее: ещё ссылка или готово", callback_data=f"create:proceed:{link_id}"))
+    return builder.as_markup()
+
+
 def deeplink_keyboard():
     builder = InlineKeyboardBuilder()
     for item in merged_deeplinks():
@@ -450,12 +460,11 @@ async def _create_link_with_format(
         }
     )
 
-    # сессия «ещё ссылка»
     line = session_line_for_record(record)
-    prev_raw = data.get("create_session_batch")
-    if not isinstance(prev_raw, list):
-        prev_raw = []
-    new_batch: list[str] = list(prev_raw) + [line]
+    prev_ids = data.get("create_session_link_ids")
+    if not isinstance(prev_ids, list):
+        prev_ids = []
+    new_ids: list[str] = [str(x) for x in prev_ids] + [record["id"]]
 
     await state.clear()
     await state.update_data(
@@ -464,16 +473,14 @@ async def _create_link_with_format(
         date_value=record.get("date_value"),
         format_id=record.get("format_id"),
         quick_more=True,
-        create_session_batch=new_batch,
+        create_session_link_ids=new_ids,
     )
 
     msg_text = line
     if isinstance(target, CallbackQuery) and target.message:
-        await target.message.answer(msg_text)
-        await target.message.answer("Дальше:", reply_markup=after_create_keyboard(record["id"]))
+        await target.message.answer(msg_text, reply_markup=create_post_link_keyboard(record["id"]))
     elif isinstance(target, Message):
-        await target.answer(msg_text)
-        await target.answer("Дальше:", reply_markup=after_create_keyboard(record["id"]))
+        await target.answer(msg_text, reply_markup=create_post_link_keyboard(record["id"]))
 
 
 
@@ -706,6 +713,22 @@ async def format_selected(callback: CallbackQuery, state: FSMContext) -> None:
     await _create_link_with_format(callback, state, format_option=format_option)
 
 
+@router.callback_query(F.data.startswith("create:proceed:"))
+async def create_proceed_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not can_use_bot(callback.from_user.id if callback.from_user else None):
+        await deny_access(callback)
+        return
+    link_id = callback.data.split(":", maxsplit=2)[2]
+    record = STORE.get_link(link_id)
+    uid = callback.from_user.id if callback.from_user else None
+    await callback.answer()
+    if not can_access_record(uid, record) or not callback.message:
+        if callback.message:
+            await callback.message.answer("Ссылка не найдена.")
+        return
+    await callback.message.answer("Дальше:", reply_markup=after_create_keyboard(link_id))
+
+
 @router.callback_query(F.data == "create:finish")
 async def create_finish_callback(callback: CallbackQuery, state: FSMContext) -> None:
     if not can_use_bot(callback.from_user.id if callback.from_user else None):
@@ -713,13 +736,20 @@ async def create_finish_callback(callback: CallbackQuery, state: FSMContext) -> 
         return
     await callback.answer()
     data = await state.get_data()
-    batch = data.get("create_session_batch")
-    if not isinstance(batch, list) or not batch:
-        batch = None
+    ids = data.get("create_session_link_ids")
+    if not isinstance(ids, list) or not ids:
+        lines_text = None
+    else:
+        lines: list[str] = []
+        for lid in ids:
+            rec = STORE.get_link(str(lid))
+            if rec:
+                lines.append(session_line_for_record(rec))
+        lines_text = "\n".join(lines) if lines else None
     await state.clear()
     if callback.message:
-        if batch:
-            await callback.message.answer("\n".join(str(x) for x in batch), reply_markup=main_menu())
+        if lines_text:
+            await callback.message.answer(lines_text, reply_markup=main_menu())
         else:
             await callback.message.answer("Готово.", reply_markup=main_menu())
 
@@ -740,9 +770,9 @@ async def create_more_callback(callback: CallbackQuery, state: FSMContext) -> No
         return
 
     data_before = await state.get_data()
-    prev_batch = data_before.get("create_session_batch")
-    if not isinstance(prev_batch, list) or not prev_batch:
-        prev_batch = [session_line_for_record(record)]
+    prev_ids = data_before.get("create_session_link_ids")
+    if not isinstance(prev_ids, list) or not prev_ids:
+        prev_ids = [str(record["id"])]
 
     await state.clear()
     await state.update_data(
@@ -751,7 +781,7 @@ async def create_more_callback(callback: CallbackQuery, state: FSMContext) -> No
         date_value=record.get("date_value"),
         format_id=record.get("format_id"),
         quick_more=True,
-        create_session_batch=prev_batch,
+        create_session_link_ids=[str(x) for x in prev_ids],
     )
     deeplink_id = str(record.get("deeplink_id") or "main")
     await prompt_marketplaces_for_more(callback, deeplink_id, state)
@@ -827,6 +857,10 @@ async def token_received(message: Message, state: FSMContext) -> None:
         await message.answer("Ссылка не найдена. Попробуйте открыть её заново из списка.")
         return
 
+    link_ids = data.get("create_session_link_ids")
+    if not isinstance(link_ids, list):
+        link_ids = []
+
     updates = await MOBZ.attach_marking_token(record, token)
     updated = STORE.update_link(
         record["id"],
@@ -846,6 +880,16 @@ async def token_received(message: Message, state: FSMContext) -> None:
         "❗️Подготовили вам ссылки для публикации, ерид вшит!\n"
         f"Ссылка {marketplace_label}: “{updated['short_url']}”"
     )
+    if link_ids:
+        await state.update_data(
+            quick_more=True,
+            create_session_link_ids=[str(x) for x in link_ids],
+            blogger_raw=updated.get("blogger_raw"),
+            blogger_slug=updated.get("blogger_slug"),
+            date_value=updated.get("date_value"),
+            format_id=updated.get("format_id"),
+        )
+        await message.answer("Дальше:", reply_markup=after_create_keyboard(updated["id"]))
 
 
 async def _answer_stats_period(message: Message, start_date: date, end_date: date) -> None:

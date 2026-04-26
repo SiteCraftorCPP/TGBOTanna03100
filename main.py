@@ -65,7 +65,7 @@ def session_line_for_record(record: dict[str, Any]) -> str:
         u = str(record.get("source_url") or record.get("short_url") or "").strip()
     else:
         u = str(record.get("short_url") or "").strip()
-    return f"{label}: {u}"
+    return f"Ссылка {label}: {u}"
 
 
 def can_access_record(user_id: int | None, record: dict[str, Any] | None) -> bool:
@@ -875,11 +875,7 @@ async def token_received(message: Message, state: FSMContext) -> None:
         await message.answer("Не удалось сохранить токен.")
         return
 
-    marketplace_label = updated["marketplace_notification_label"]
-    await message.answer(
-        "❗️Подготовили вам ссылки для публикации, ерид вшит!\n"
-        f"Ссылка {marketplace_label}: “{updated['short_url']}”"
-    )
+    await message.answer(session_line_for_record(updated))
     if link_ids:
         await state.update_data(
             quick_more=True,

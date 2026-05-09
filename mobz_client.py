@@ -3,6 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+
+def _url_with_erid(base_url: str, token: str, field: str = "detail_erid") -> str:
+    raw = base_url.strip()
+    if not raw:
+        return raw
+    if not raw.startswith(("http://", "https://")):
+        raw = f"https://{raw}"
+    parsed = urlsplit(raw)
+    items = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k != field]
+    items.append((field, token))
+    query = urlencode(items, doseq=True)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment))
 
 
 @dataclass(slots=True)
@@ -53,10 +67,12 @@ class MockMobzClient(MobzClient):
         return CreateLinkResult(external_id=external_id, short_url=short_url)
 
     async def attach_marking_token(self, link_record: dict[str, Any], token: str) -> dict[str, Any]:
-        return {
-            "token": token,
-            "token_status": "applied",
-        }
+        base = str(link_record.get("short_url") or "").strip()
+        short_url = _url_with_erid(base, token) if base else base
+        out: dict[str, Any] = {"token_status": "applied"}
+        if short_url:
+            out["short_url"] = short_url
+        return out
 
     async def stats_for_period(
         self,

@@ -61,8 +61,14 @@ def session_line_for_record(record: dict[str, Any]) -> str:
         or record.get("marketplace_label")
         or "LINK"
     )
-    if str(record.get("marketplace_id") or "") == "wb":
-        u = str(record.get("source_url") or record.get("short_url") or "").strip()
+    mid = str(record.get("marketplace_id") or "")
+    applied = str(record.get("token_status") or "") == "applied"
+    # WB без ЕРИД: длинная ссылка; после вшивки — mobz с ?detail_erid=…
+    if mid == "wb":
+        if applied:
+            u = str(record.get("short_url") or "").strip()
+        else:
+            u = str(record.get("source_url") or record.get("short_url") or "").strip()
     else:
         u = str(record.get("short_url") or "").strip()
     return f"Ссылка {label}: {u}"

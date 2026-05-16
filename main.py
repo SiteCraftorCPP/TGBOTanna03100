@@ -39,6 +39,10 @@ class StatsStates(StatesGroup):
     entering_period = State()
 
 
+class AdminStates(StatesGroup):
+    entering_allowed_user_id = State()
+
+
 router = Router()
 CONFIG: AppConfig
 STORE: JsonStorage
@@ -48,7 +52,7 @@ MOBZ: MobzClient
 def can_use_bot(user_id: int | None) -> bool:
     if user_id is None:
         return False
-    return user_id in CONFIG.admin_ids
+    return user_id in CONFIG.admin_ids or STORE.is_allowed_user(user_id)
 
 
 def is_admin(user_id: int | None) -> bool:
@@ -91,7 +95,7 @@ def can_access_record(user_id: int | None, record: dict[str, Any] | None) -> boo
 
 
 async def deny_access(target: Message | CallbackQuery) -> None:
-    text = "Доступ запрещён. Ваш Telegram ID не указан в TELEGRAM_ADMIN_IDS."
+    text = "Доступ запрещён."
     if isinstance(target, Message):
         await target.answer(text, reply_markup=ReplyKeyboardRemove())
     else:
@@ -106,6 +110,57 @@ def main_menu() -> Any:
     builder.button(text="Справка")
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
+
+
+_ADMIN_REVOKE_PAGE = 12
+
+
+def admin_menu_keyboard() -> Any:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="Добавить пользователя", callback_data="admin:add"))
+    builder.row(InlineKeyboardButton(text="Отозвать доступ", callback_data="admin:list_revoke"))
+    return builder.as_markup()
+
+
+def admin_add_cancel_keyboard() -> Any:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="Отмена", callback_data="admin:canceladd"))
+    return builder.as_markup()
+
+
+def _clamp_revoke_page(page: int, total_items: int, page_size: int) -> int:
+    if total_items <= 0:
+        return 0
+    max_p = max(0, (total_items - 1) // page_size)
+    return max(0, min(page, max_p))
+
+
+def admin_revoke_list_keyboard(user_ids: list[int], page: int = 0) -> Any:
+    sorted_ids = sorted(user_ids)
+    builder = InlineKeyboardBuilder()
+    if not sorted_ids:
+        builder.row(InlineKeyboardButton(text="« Админка", callback_data="admin:home"))
+        return builder.as_markup()
+    page_sz = _ADMIN_REVOKE_PAGE
+    safe_page = _clamp_revoke_page(page, len(sorted_ids), page_sz)
+    start = safe_page * page_sz
+    chunk = sorted_ids[start : start + page_sz]
+    for uid in chunk:
+        builder.row(
+            InlineKeyboardButton(
+                text=f"Отозвать {uid}",
+                callback_data=f"admin:rm:{uid}",
+            )
+        )
+    nav: list[InlineKeyboardButton] = []
+    if safe_page > 0:
+        nav.append(InlineKeyboardButton(text="◀", callback_data=f"admin:rvp:{safe_page - 1}"))
+    if start + len(chunk) < len(sorted_ids):
+        nav.append(InlineKeyboardButton(text="▶", callback_data=f"admin:rvp:{safe_page + 1}"))
+    if nav:
+        builder.row(*nav)
+    builder.row(InlineKeyboardButton(text="« Админка", callback_data="admin:home"))
+    return builder.as_markup()
 
 
 def merged_deeplinks() -> list[DeeplinkConfig]:
@@ -163,6 +218,9 @@ def format_by_id(format_id: str) -> FormatOption:
         if item.id == format_id:
             return item
     raise KeyError(f"Не найден формат: {format_id}")
+
+
+_NEW_USER_TELEGRAM_ID_RE = re.compile(r"^\s*(\d{4,16})\s*$")
 
 
 def normalize_blogger(value: str) -> str:
@@ -527,11 +585,14 @@ async def show_links(message: Message | CallbackQuery) -> None:
 
 
 async def show_help(message: Message) -> None:
-    await message.answer(
+    text = (
         "Создать ссылку → площадка → папка (если есть) → URL → ник → дата ДД.ММ → формат.\n"
         "Потом «Мои ссылки» → вшить ЕРИД.\n"
         "/cancel — сброс."
     )
+    if is_admin(message.from_user.id if message.from_user else None):
+        text += "\nАдминистратор: /admin."
+    await message.answer(text)
 
 
 @router.message(CommandStart())
@@ -552,6 +613,154 @@ async def cancel_handler(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await message.answer("Сброс.", reply_markup=main_menu())
+
+
+@router.message(Command("admin"))
+async def admin_panel_cmd(message: Message, state: FSMContext) -> None:
+    uid = message.from_user.id if message.from_user else None
+    if not can_use_bot(uid):
+        await deny_access(message)
+        return
+    if not is_admin(uid):
+        await message.answer("Доступ запрещён.")
+        return
+
+    await state.clear()
+    await message.answer("Админка:", reply_markup=admin_menu_keyboard())
+
+
+@router.callback_query(F.data.startswith("admin:"))
+async def admin_callback_router(callback: CallbackQuery, state: FSMContext) -> None:
+    uid = callback.from_user.id if callback.from_user else None
+    if uid is None or not is_admin(uid):
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+
+    payload = callback.data or ""
+    msg = callback.message
+
+    async def refresh_revoke_board(page: int) -> None:
+        ids_live = STORE.list_allowed_user_ids()
+        if msg is None:
+            return
+        if ids_live:
+            await msg.edit_text(
+                "Кому отозвать доступ:",
+                reply_markup=admin_revoke_list_keyboard(ids_live, page),
+            )
+        else:
+            await msg.edit_text("Админка:", reply_markup=admin_menu_keyboard())
+
+    if payload == "admin:home":
+        await callback.answer()
+        if msg:
+            await msg.edit_text("Админка:", reply_markup=admin_menu_keyboard())
+        return
+
+    if payload == "admin:add":
+        await callback.answer()
+        await state.set_state(AdminStates.entering_allowed_user_id)
+        await callback.message.answer(
+            "Пришлите числовой Telegram ID пользователя (можно узнать у ботов вроде @userinfobot).",
+            reply_markup=admin_add_cancel_keyboard(),
+        )
+        return
+
+    if payload == "admin:list_revoke":
+        ids_list = STORE.list_allowed_user_ids()
+        if not ids_list:
+            await callback.answer("Список пуст.", show_alert=True)
+            return
+        await callback.answer()
+        if msg:
+            await msg.edit_text(
+                "Кому отозвать доступ:",
+                reply_markup=admin_revoke_list_keyboard(ids_list, 0),
+            )
+        return
+
+    if payload == "admin:canceladd":
+        await state.clear()
+        await callback.answer()
+        try:
+            if msg:
+                await msg.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    if payload.startswith("admin:rvp:"):
+        tail = payload.split(":")[2]
+        page = max(0, int(tail))
+        ids_live = STORE.list_allowed_user_ids()
+        if not ids_live:
+            await callback.answer()
+            await refresh_revoke_board(0)
+            return
+        await callback.answer()
+        if msg:
+            page = _clamp_revoke_page(page, len(ids_live), _ADMIN_REVOKE_PAGE)
+            await msg.edit_reply_markup(reply_markup=admin_revoke_list_keyboard(ids_live, page))
+        return
+
+    if payload.startswith("admin:rm:"):
+        try:
+            target = int(payload.split(":", maxsplit=2)[2])
+        except (IndexError, ValueError):
+            await callback.answer()
+            return
+        removed = STORE.remove_allowed_user_id(target)
+        ids_after = STORE.list_allowed_user_ids()
+        await callback.answer("Отозвали доступ." if removed else "Такого ID не было в списке.", show_alert=True)
+        if msg:
+            try:
+                if ids_after:
+                    await msg.edit_text(
+                        "Кому отозвать доступ:",
+                        reply_markup=admin_revoke_list_keyboard(ids_after, 0),
+                    )
+                else:
+                    await msg.edit_text("Админка:", reply_markup=admin_menu_keyboard())
+            except Exception:
+                pass
+        return
+
+
+@router.message(AdminStates.entering_allowed_user_id)
+async def admin_add_receive_user_id(message: Message, state: FSMContext) -> None:
+    uid_op = message.from_user.id if message.from_user else None
+    if not can_use_bot(uid_op) or uid_op is None:
+        await deny_access(message)
+        return
+    if not is_admin(uid_op):
+        await message.answer("Доступ запрещён.")
+        await state.clear()
+        return
+
+    raw = (message.text or "").strip()
+    mt = _NEW_USER_TELEGRAM_ID_RE.match(raw)
+    if not mt:
+        await message.answer(
+            "Нужен только числовой ID (латинские цифры без пробелов), от 4 разрядов, например 123456789."
+        )
+        return
+
+    new_id = int(mt.group(1))
+    if new_id == uid_op:
+        await message.answer("Это ваш собственный ID — вы уже администратор.")
+        await state.clear()
+        return
+    if new_id in CONFIG.admin_ids:
+        await message.answer("Этот ID уже в TELEGRAM_ADMIN_IDS (администратор). Отдельно добавлять не нужно.")
+        await state.clear()
+        return
+
+    if STORE.add_allowed_user_id(new_id):
+        await message.answer(f"Готово: пользователь {new_id} получил доступ к боту.")
+    else:
+        await message.answer("Этот ID уже есть в списке пользователей.")
+
+    await state.clear()
 
 
 @router.message(F.text == "Справка")

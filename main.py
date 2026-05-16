@@ -46,7 +46,9 @@ MOBZ: MobzClient
 
 
 def can_use_bot(user_id: int | None) -> bool:
-    return user_id is not None
+    if user_id is None:
+        return False
+    return user_id in CONFIG.admin_ids
 
 
 def is_admin(user_id: int | None) -> bool:
@@ -89,7 +91,7 @@ def can_access_record(user_id: int | None, record: dict[str, Any] | None) -> boo
 
 
 async def deny_access(target: Message | CallbackQuery) -> None:
-    text = "Откройте бот из личного чата."
+    text = "Доступ запрещён. Ваш Telegram ID не указан в TELEGRAM_ADMIN_IDS."
     if isinstance(target, Message):
         await target.answer(text, reply_markup=ReplyKeyboardRemove())
     else:

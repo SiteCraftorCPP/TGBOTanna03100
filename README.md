@@ -6,7 +6,7 @@
 
 - `TELEGRAM_BOT_TOKEN` — обязателен.
 - `TELEGRAM_PROXY` — по желанию.
-- `TELEGRAM_ADMIN_IDS` — id админов через запятую; у них в «Мои ссылки» весь `storage`, у остальных — только свои карточки.
+- `TELEGRAM_ADMIN_IDS` — **обязательно**, непустой список числовых Telegram ID через запятую: **только они могут пользоваться ботом**. В «Мои ссылки» у них весь `storage` (все карточки).
 - `MOBZ_PROVIDER` — `mock` или `http`.
 - Ключи Mobz: `MOBZ_API_KEY_MAIN` (или что в `api_key_env` у диплинка), fallback `MOBZ_API_KEY`.
 

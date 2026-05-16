@@ -210,6 +210,11 @@ def load_config() -> AppConfig:
         raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN в .env")
 
     admin_ids = _parse_admin_ids(os.getenv("TELEGRAM_ADMIN_IDS", ""))
+    if not admin_ids:
+        raise RuntimeError(
+            "В .env нужен непустой TELEGRAM_ADMIN_IDS — список числовых Telegram ID, "
+            "которые могут пользоваться ботом (через запятую)."
+        )
     formats, deeplinks, mobz_api = _load_settings(project_dir)
     proxy_url = _normalize_proxy(os.getenv("TELEGRAM_PROXY"))
 
